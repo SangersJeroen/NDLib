@@ -14,8 +14,8 @@ import os
 # Add the parent directory to the path to import eels_base
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from eels_base.ndlib.BaseStructures import Ensemble, DataBlock
-from eels_base.ndlib.AxesStructures import SignalAxis, UnorderedSignalAxis, CategoricalAxis
+from NDLib.BaseStructures import Ensemble, DataBlock
+from NDLib.AxesStructures import SignalAxis, UnorderedSignalAxis, CategoricalAxis
 
 
 class TestEnsembleInitialization:

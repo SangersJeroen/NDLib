@@ -16,8 +16,8 @@ import shutil
 # Add the parent directory to the path to import eels_base
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from eels_base.ndlib.BaseStructures import DataBlock, Ensemble
-from eels_base.ndlib.AxesStructures import SignalAxis, UnorderedSignalAxis, CategoricalAxis
+from NDLib.BaseStructures import DataBlock, Ensemble
+from NDLib.AxesStructures import SignalAxis, UnorderedSignalAxis, CategoricalAxis
 
 
 class TestDataBlockSerialization:
