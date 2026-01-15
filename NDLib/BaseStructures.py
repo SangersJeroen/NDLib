@@ -105,6 +105,38 @@ class DataBlock:
                 )
         self.shape: tuple[int, ...] = tuple([axis.size for axis in self.axes])
 
+    def reorder_axis(self, axis_name: str, target_index: int) -> None:
+        """
+        Allows reording of both axis and data.
+        Will call `__post_init_db__` to verify data shape and axes match.
+
+        Args:
+            axis_name: str, name of axis to reorder 
+            target_index: int, dimensional position to move axis to
+
+        Raises:
+            RuntimeError: If axis with `axis_name` not known.
+        """
+        if not self.has_axis(axis_name):
+            raise RuntimeError(f'{self} has no axis: {axis_name}')
+
+        old_axes = deepcopy(self.axes)
+        old_index = self.axis_obj(axis_name).index_in_array
+        if not self.axes[target_index].name == axis_name:
+            axis_at_target = old_axes[target_index]
+
+            old_axes[target_index] = self.axes[old_index]
+            old_axes[target_index].index_in_array = target_index
+            old_axes[old_index] = axis_at_target
+            old_axes[old_index].index_in_array = old_index
+
+            self.axes = old_axes
+            self.data = da.swapaxes(self.data, target_index, old_index)
+
+            self.__post_init_db__()
+        else:
+            print(f'axis {axis_name} already at index {target_index}')
+
     def compute(self) -> np.ndarray:
         """Computes or returns the quantity in self.data depending on
         whether it has been computed before.
