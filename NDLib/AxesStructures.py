@@ -68,7 +68,7 @@ class SignalAxis(Axis):
             #     axis_points[1:] - axis_points[:-1], first_diff
             # ), "Axis points are not monotonically increasing, try UnorderedSignalAxis"
 
-        self.points: Axis1D = axis_points
+        self.points: Axis1D = np.array(axis_points)
         self.ordered = True
         self.size: int = len(self.points)
         if self.size > 1:
