@@ -60,3 +60,6 @@ models/*
 *.zarr
 */io_log.txt
 # *.ipynb
+uv.lock
+.venv/*
+.venv
