@@ -470,6 +470,7 @@ class TestEnsembleToDataBlock:
             db_result = ensemble.to_datablock(rebin_scheme={})
             # If successful, verify it's a DataBlock
             assert isinstance(db_result, DataBlock)
+            assert db_result.data == db_original.data
         except (AssertionError, ValueError):
             # to_datablock may have requirements we're not meeting
             # Just verify the ensemble was created correctly
