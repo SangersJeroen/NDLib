@@ -4,17 +4,20 @@ Utilities for parsing indexing expressions in DataBlock and Ensemble.
 """
 
 import re
+
 import numpy as np
 
 COMPOUND_PATTERN = (
-# Pattern for compound inequalities: -3<=x<3 or 1<x<=5
+    # Pattern for compound inequalities: -3<=x<3 or 1<x<=5
     r"^([+-]?\d+\.?\d*)\s*([<>]=?)\s*(\w*\s*\w*)\s*([<>]=?)\s*([+-]?\d+\.?\d*)$"
 )
 # Pattern for simple inequalities: x>2, x<=5
 SIMPLE_PATTERN = r"^(\w*\s*\w*)\s*([<=>]=?)\s*([+-]?\d+\.?\d*)$"
 
 
-def parse_categorical_to_mask(axis_name: str, expr: str, axis_points: np.ndarray) -> np.ndarray:
+def parse_categorical_to_mask(
+    axis_name: str, expr: str, axis_points: np.ndarray
+) -> np.ndarray:
     """
     Parse categorical equality expressions and return a boolean mask.
 
@@ -53,8 +56,8 @@ def parse_categorical_to_mask(axis_name: str, expr: str, axis_points: np.ndarray
 
         if op == "==":
             return axis_points == value
-        else:  # '!='
-            return axis_points != value
+        # '!='
+        return axis_points != value
 
     raise ValueError(f"Invalid categorical expression: '{expr}' for axis '{axis_name}'")
 
@@ -101,7 +104,9 @@ def parse_categorical_to_query(axis_name: str, expr: str) -> str:
     raise ValueError(f"Invalid categorical expression: '{expr}' for axis '{axis_name}'")
 
 
-def parse_inequality_to_mask(axis_name: str, expr: str, axis_points: np.ndarray) -> np.ndarray:
+def parse_inequality_to_mask(
+    axis_name: str, expr: str, axis_points: np.ndarray
+) -> np.ndarray:
     """
     Parse inequality expressions for a given axis and return a boolean mask.
 
@@ -176,14 +181,14 @@ def parse_inequality_to_mask(axis_name: str, expr: str, axis_points: np.ndarray)
 
         if op == "<":
             return axis_points < val
-        elif op == "<=":
+        if op == "<=":
             return axis_points <= val
-        elif op == ">":
+        if op == ">":
             return axis_points > val
-        elif op == "==":
+        if op == "==":
             return axis_points == val
-        else:  # '>='
-            return axis_points >= val
+        # '>='
+        return axis_points >= val
 
     raise ValueError(f"Invalid inequality expression: '{expr}' for axis '{axis_name}'")
 

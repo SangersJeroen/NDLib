@@ -3,19 +3,20 @@ Comprehensive unit tests for Ensemble class from eels_base/ndlib/BaseStructures.
 This test suite thoroughly tests all methods and edge cases of the Ensemble class.
 """
 
-import pytest
-import numpy as np
+import os
+import sys
+
 import dask.array as da
 import dask.dataframe as dd
+import numpy as np
 import pandas as pd
-import sys
-import os
+import pytest
 
 # Add the parent directory to the path to import eels_base
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from NDLib.BaseStructures import Ensemble, DataBlock
-from NDLib.AxesStructures import SignalAxis, UnorderedSignalAxis, CategoricalAxis
+from NDLib.AxesStructures import SignalAxis, UnorderedSignalAxis
+from NDLib.BaseStructures import DataBlock, Ensemble
 
 
 class TestEnsembleInitialization:
@@ -24,18 +25,20 @@ class TestEnsembleInitialization:
     def test_basic_initialization(self):
         """Test basic Ensemble creation with valid inputs"""
         # Create sample data
-        df = pd.DataFrame(
-            {
-                "x": [1.0, 2.0, 3.0, 4.0, 5.0],
-                "y": [10.0, 20.0, 30.0, 40.0, 50.0],
-                "intensity": [100, 200, 300, 400, 500],
-            }
-        )
+        df = pd.DataFrame({
+            "x": [1.0, 2.0, 3.0, 4.0, 5.0],
+            "y": [10.0, 20.0, 30.0, 40.0, 50.0],
+            "intensity": [100, 200, 300, 400, 500],
+        })
         ddf = dd.from_pandas(df, npartitions=2)
 
         axes = [
-            UnorderedSignalAxis(np.array([1.0, 2.0, 3.0, 4.0, 5.0]), "x", 0, "nm", True),
-            UnorderedSignalAxis(np.array([10.0, 20.0, 30.0, 40.0, 50.0]), "y", 1, "nm", True),
+            UnorderedSignalAxis(
+                np.array([1.0, 2.0, 3.0, 4.0, 5.0]), "x", 0, "nm", True
+            ),
+            UnorderedSignalAxis(
+                np.array([10.0, 20.0, 30.0, 40.0, 50.0]), "y", 1, "nm", True
+            ),
         ]
 
         ensemble = Ensemble(ddf, axes, quantity="intensity", unit="counts")
@@ -74,7 +77,11 @@ class TestEnsembleCompute:
 
     def test_compute_lazy_dataframe(self):
         """Test computing a lazy dask DataFrame"""
-        df = pd.DataFrame({"x": [1.0, 2.0, 3.0], "y": [10.0, 20.0, 30.0], "value": [100, 200, 300]})
+        df = pd.DataFrame({
+            "x": [1.0, 2.0, 3.0],
+            "y": [10.0, 20.0, 30.0],
+            "value": [100, 200, 300],
+        })
         ddf = dd.from_pandas(df, npartitions=2)
 
         axes = [
@@ -148,14 +155,18 @@ class TestEnsembleAxisMethods:
 
     def test_has_axis_existing(self):
         """Test has_axis returns True for existing axis"""
-        df = pd.DataFrame(
-            {"x": [1.0, 2.0, 3.0], "energy": [100.0, 200.0, 300.0], "value": [10, 20, 30]}
-        )
+        df = pd.DataFrame({
+            "x": [1.0, 2.0, 3.0],
+            "energy": [100.0, 200.0, 300.0],
+            "value": [10, 20, 30],
+        })
         ddf = dd.from_pandas(df, npartitions=1)
 
         axes = [
             UnorderedSignalAxis(np.array([1.0, 2.0, 3.0]), "x", 0, "nm", True),
-            UnorderedSignalAxis(np.array([100.0, 200.0, 300.0]), "energy", 1, "eV", True),
+            UnorderedSignalAxis(
+                np.array([100.0, 200.0, 300.0]), "energy", 1, "eV", True
+            ),
         ]
         ensemble = Ensemble(ddf, axes, quantity="value")
 
@@ -266,18 +277,20 @@ class TestEnsembleGetMethod:
 
     def test_get_with_inequality(self):
         """Test get with inequality expressions"""
-        df = pd.DataFrame(
-            {
-                "x": [1.0, 2.0, 3.0, 4.0, 5.0],
-                "y": [10.0, 20.0, 30.0, 40.0, 50.0],
-                "value": [100, 200, 300, 400, 500],
-            }
-        )
+        df = pd.DataFrame({
+            "x": [1.0, 2.0, 3.0, 4.0, 5.0],
+            "y": [10.0, 20.0, 30.0, 40.0, 50.0],
+            "value": [100, 200, 300, 400, 500],
+        })
         ddf = dd.from_pandas(df, npartitions=2)
 
         axes = [
-            UnorderedSignalAxis(np.array([1.0, 2.0, 3.0, 4.0, 5.0]), "x", 0, "nm", True),
-            UnorderedSignalAxis(np.array([10.0, 20.0, 30.0, 40.0, 50.0]), "y", 1, "nm", True),
+            UnorderedSignalAxis(
+                np.array([1.0, 2.0, 3.0, 4.0, 5.0]), "x", 0, "nm", True
+            ),
+            UnorderedSignalAxis(
+                np.array([10.0, 20.0, 30.0, 40.0, 50.0]), "y", 1, "nm", True
+            ),
         ]
         ensemble = Ensemble(ddf, axes, quantity="value")
 
@@ -288,18 +301,20 @@ class TestEnsembleGetMethod:
 
     def test_get_with_multiple_axes(self):
         """Test get with multiple axes"""
-        df = pd.DataFrame(
-            {
-                "x": [1.0, 2.0, 3.0, 4.0, 5.0],
-                "y": [10.0, 20.0, 30.0, 40.0, 50.0],
-                "value": [100, 200, 300, 400, 500],
-            }
-        )
+        df = pd.DataFrame({
+            "x": [1.0, 2.0, 3.0, 4.0, 5.0],
+            "y": [10.0, 20.0, 30.0, 40.0, 50.0],
+            "value": [100, 200, 300, 400, 500],
+        })
         ddf = dd.from_pandas(df, npartitions=2)
 
         axes = [
-            UnorderedSignalAxis(np.array([1.0, 2.0, 3.0, 4.0, 5.0]), "x", 0, "nm", True),
-            UnorderedSignalAxis(np.array([10.0, 20.0, 30.0, 40.0, 50.0]), "y", 1, "nm", True),
+            UnorderedSignalAxis(
+                np.array([1.0, 2.0, 3.0, 4.0, 5.0]), "x", 0, "nm", True
+            ),
+            UnorderedSignalAxis(
+                np.array([10.0, 20.0, 30.0, 40.0, 50.0]), "y", 1, "nm", True
+            ),
         ]
         ensemble = Ensemble(ddf, axes, quantity="value")
 
@@ -328,18 +343,20 @@ class TestEnsembleValueGet:
 
     def test_value_get_basic(self):
         """Test value_get returns tuple of data and axes dict"""
-        df = pd.DataFrame(
-            {
-                "x": [1.0, 2.0, 3.0, 4.0, 5.0],
-                "y": [10.0, 20.0, 30.0, 40.0, 50.0],
-                "value": [100, 200, 300, 400, 500],
-            }
-        )
+        df = pd.DataFrame({
+            "x": [1.0, 2.0, 3.0, 4.0, 5.0],
+            "y": [10.0, 20.0, 30.0, 40.0, 50.0],
+            "value": [100, 200, 300, 400, 500],
+        })
         ddf = dd.from_pandas(df, npartitions=2)
 
         axes = [
-            UnorderedSignalAxis(np.array([1.0, 2.0, 3.0, 4.0, 5.0]), "x", 0, "nm", True),
-            UnorderedSignalAxis(np.array([10.0, 20.0, 30.0, 40.0, 50.0]), "y", 1, "nm", True),
+            UnorderedSignalAxis(
+                np.array([1.0, 2.0, 3.0, 4.0, 5.0]), "x", 0, "nm", True
+            ),
+            UnorderedSignalAxis(
+                np.array([10.0, 20.0, 30.0, 40.0, 50.0]), "y", 1, "nm", True
+            ),
         ]
         ensemble = Ensemble(ddf, axes, quantity="value")
 
@@ -399,13 +416,11 @@ class TestEnsembleSplitOnAxis:
 
     def test_split_on_axis(self):
         """Test splitting Ensemble on an axis"""
-        df = pd.DataFrame(
-            {
-                "x": [1.0, 1.0, 2.0, 2.0, 3.0, 3.0],
-                "y": [10.0, 20.0, 10.0, 20.0, 10.0, 20.0],
-                "value": [100, 200, 300, 400, 500, 600],
-            }
-        )
+        df = pd.DataFrame({
+            "x": [1.0, 1.0, 2.0, 2.0, 3.0, 3.0],
+            "y": [10.0, 20.0, 10.0, 20.0, 10.0, 20.0],
+            "value": [100, 200, 300, 400, 500, 600],
+        })
         ddf = dd.from_pandas(df, npartitions=2)
 
         axes = [
@@ -496,14 +511,12 @@ class TestEnsembleEdgeCases:
 
     def test_ensemble_with_many_axes(self):
         """Test Ensemble with multiple axes"""
-        df = pd.DataFrame(
-            {
-                "x": [1.0, 2.0, 3.0],
-                "y": [10.0, 20.0, 30.0],
-                "z": [100.0, 200.0, 300.0],
-                "value": [1000, 2000, 3000],
-            }
-        )
+        df = pd.DataFrame({
+            "x": [1.0, 2.0, 3.0],
+            "y": [10.0, 20.0, 30.0],
+            "z": [100.0, 200.0, 300.0],
+            "value": [1000, 2000, 3000],
+        })
         ddf = dd.from_pandas(df, npartitions=1)
 
         axes = [
@@ -523,12 +536,10 @@ class TestEnsembleRebinAxis:
     def test_rebin_reduce_axis(self):
         """Test rebinning with reduction"""
         # Create data with regular spacing
-        df = pd.DataFrame(
-            {
-                "x": [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5],
-                "value": [10, 20, 30, 40, 50, 60, 70, 80, 90, 100],
-            }
-        )
+        df = pd.DataFrame({
+            "x": [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5],
+            "value": [10, 20, 30, 40, 50, 60, 70, 80, 90, 100],
+        })
         ddf = dd.from_pandas(df, npartitions=2)
 
         axes = [SignalAxis(np.arange(0, 5, 0.5), "x", 0, "nm", True)]

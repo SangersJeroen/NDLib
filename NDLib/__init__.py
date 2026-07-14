@@ -1,2 +1,2 @@
 from .AxesStructures import SignalAxis, UnorderedSignalAxis
-from .BaseStructures import Ensemble, DataBlock
+from .BaseStructures import DataBlock, Ensemble

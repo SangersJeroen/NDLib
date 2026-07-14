@@ -1,8 +1,9 @@
 # pyright: basic
 from typing import Literal
+
 import numpy as np
-from .Types import Number, Axis1D
-from typing import Optional
+
+from .Types import Axis1D, Number
 
 
 class Axis:
@@ -25,11 +26,11 @@ class Axis:
         self.index_in_array: int = index_in_array
         self.unit: str = unit
         self.is_nav: bool = navigate
-        self.ordered: Optional[bool] = None
+        self.ordered: bool | None = None
         self.size: int = 0
-        self.min: Optional[Number] = None
-        self.max: Optional[Number] = None
-        self.scale: Optional[Number] = None
+        self.min: Number | None = None
+        self.max: Number | None = None
+        self.scale: Number | None = None
 
     def __repr__(self) -> str:
         return f"{self.__class__}  {self.name}  {self.unit}  {self.index_in_array}"
@@ -58,7 +59,12 @@ class SignalAxis(Axis):
     """
 
     def __init__(
-        self, axis_points: Axis1D, name: str, index_in_array: int, unit: str, navigate: bool
+        self,
+        axis_points: Axis1D,
+        name: str,
+        index_in_array: int,
+        unit: str,
+        navigate: bool,
     ):
         super().__init__(name, index_in_array, unit, navigate)
 
@@ -121,14 +127,19 @@ class UnorderedSignalAxis(Axis):
     """
 
     def __init__(
-        self, axis_points: Axis1D, name: str, index_in_array: int, unit: str, navigate: bool
+        self,
+        axis_points: Axis1D,
+        name: str,
+        index_in_array: int,
+        unit: str,
+        navigate: bool,
     ):
         super().__init__(name, index_in_array, unit, navigate)
         assert len(axis_points) > 1, "Axis is of length 1 or less"
 
         self.points: Axis1D = axis_points
         self.binned: bool = False
-        self.scale: Optional[Number] = None
+        self.scale: Number | None = None
         self.ordered = False
         self.__post_init__()
 
@@ -147,7 +158,7 @@ class UnorderedSignalAxis(Axis):
             + f"{self.min:.2f} {self.unit} <--------{self.size} steps--------> {self.min:.2f} {self.unit}"
         )
 
-    def crop(self, min: Optional[Number] = None, max: Optional[Number] = None) -> None:
+    def crop(self, min: Number | None = None, max: Number | None = None) -> None:
         assert (min is None) & (max is None), "Both min and max are None"
 
         if min is not None and min > self.min:
@@ -171,7 +182,12 @@ class CategoricalAxis(Axis):
     """
 
     def __init__(
-        self, categories: list[str], name: str, index_in_array: int, unit: str, navigate: bool
+        self,
+        categories: list[str],
+        name: str,
+        index_in_array: int,
+        unit: str,
+        navigate: bool,
     ):
         super().__init__(name, index_in_array, unit, navigate)
 

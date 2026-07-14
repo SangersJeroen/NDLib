@@ -3,21 +3,20 @@ Comprehensive tests for DataBlock and Ensemble serialization methods.
 Tests save/load functionality including lazy loading support.
 """
 
-import pytest
-import numpy as np
+import os
+import sys
+
 import dask.array as da
 import dask.dataframe as dd
+import numpy as np
 import pandas as pd
-import sys
-import os
-from pathlib import Path
-import shutil
+import pytest
 
 # Add the parent directory to the path to import eels_base
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from NDLib.AxesStructures import CategoricalAxis, SignalAxis, UnorderedSignalAxis
 from NDLib.BaseStructures import DataBlock, Ensemble
-from NDLib.AxesStructures import SignalAxis, UnorderedSignalAxis, CategoricalAxis
 
 
 class TestDataBlockSerialization:
@@ -45,7 +44,11 @@ class TestDataBlockSerialization:
         axes = [
             SignalAxis(np.linspace(0, 4, 5), "x", 0, "um", True),
             UnorderedSignalAxis(
-                np.array([1.5, 2.3, 3.1, 4.5, 5.0, 6.2, 7.1, 8.4, 9.0, 10.5]), "y", 1, "nm", False
+                np.array([1.5, 2.3, 3.1, 4.5, 5.0, 6.2, 7.1, 8.4, 9.0, 10.5]),
+                "y",
+                1,
+                "nm",
+                False,
             ),
             SignalAxis(np.arange(15) * 0.5, "energy", 2, "eV", False),
         ]
@@ -209,7 +212,9 @@ class TestDataBlockSerialization:
         loaded_db = DataBlock.load(filepath)
         assert loaded_db.quantity == "new"
         assert loaded_db.unit == "new_unit"
-        np.testing.assert_array_almost_equal(loaded_db.data.compute(), np.ones((10, 20)))
+        np.testing.assert_array_almost_equal(
+            loaded_db.data.compute(), np.ones((10, 20))
+        )
 
     def test_metadata_preserved(self, simple_datablock, temp_dir):
         """Test that all metadata is preserved"""
@@ -240,13 +245,11 @@ class TestEnsembleSerialization:
         y_vals = np.array([0.5, 1.0, 1.5, 2.0, 2.5])
         intensity = np.array([10.0, 15.0, 20.0, 25.0, 30.0])
 
-        df = pd.DataFrame(
-            {
-                "x": x_vals,
-                "y": y_vals,
-                "intensity": intensity,
-            }
-        )
+        df = pd.DataFrame({
+            "x": x_vals,
+            "y": y_vals,
+            "intensity": intensity,
+        })
         ddf = dd.from_pandas(df, npartitions=2)
 
         axes = [
@@ -267,13 +270,11 @@ class TestEnsembleSerialization:
         y_vals = np.random.uniform(0, 10, n_points)
         signal = np.random.rand(n_points) * 100
 
-        df = pd.DataFrame(
-            {
-                "x": x_vals,
-                "y": y_vals,
-                "signal": signal,
-            }
-        )
+        df = pd.DataFrame({
+            "x": x_vals,
+            "y": y_vals,
+            "signal": signal,
+        })
         ddf = dd.from_pandas(df, npartitions=4)
 
         axes = [
@@ -318,7 +319,9 @@ class TestEnsembleSerialization:
         # Compare actual data values
         pd.testing.assert_frame_equal(
             loaded_ens.data.compute().sort_values(by=["x", "y"]).reset_index(drop=True),
-            simple_ensemble.data.compute().sort_values(by=["x", "y"]).reset_index(drop=True),
+            simple_ensemble.data.compute()
+            .sort_values(by=["x", "y"])
+            .reset_index(drop=True),
         )
 
     def test_load_simple_ensemble_eager(self, simple_ensemble, temp_dir):
@@ -334,7 +337,9 @@ class TestEnsembleSerialization:
         # Compare actual data values
         pd.testing.assert_frame_equal(
             loaded_ens.data.compute().sort_values(by=["x", "y"]).reset_index(drop=True),
-            simple_ensemble.data.compute().sort_values(by=["x", "y"]).reset_index(drop=True),
+            simple_ensemble.data.compute()
+            .sort_values(by=["x", "y"])
+            .reset_index(drop=True),
         )
 
     def test_axes_preserved(self, simple_ensemble, temp_dir):
@@ -367,8 +372,14 @@ class TestEnsembleSerialization:
         assert isinstance(loaded_ens.axes[1], UnorderedSignalAxis)
 
         # Compare data
-        orig_df = complex_ensemble.data.compute().sort_values(by=["x", "y"]).reset_index(drop=True)
-        loaded_df = loaded_ens.data.compute().sort_values(by=["x", "y"]).reset_index(drop=True)
+        orig_df = (
+            complex_ensemble.data.compute()
+            .sort_values(by=["x", "y"])
+            .reset_index(drop=True)
+        )
+        loaded_df = (
+            loaded_ens.data.compute().sort_values(by=["x", "y"]).reset_index(drop=True)
+        )
         pd.testing.assert_frame_equal(orig_df, loaded_df)
 
     def test_large_ensemble_lazy_loading(self, temp_dir):
@@ -381,13 +392,11 @@ class TestEnsembleSerialization:
         y_vals = np.random.uniform(0, 100, n_points)
         data_vals = np.random.rand(n_points)
 
-        df = pd.DataFrame(
-            {
-                "x": x_vals,
-                "y": y_vals,
-                "data": data_vals,
-            }
-        )
+        df = pd.DataFrame({
+            "x": x_vals,
+            "y": y_vals,
+            "data": data_vals,
+        })
         ddf = dd.from_pandas(df, npartitions=10)
 
         axes = [
@@ -407,8 +416,12 @@ class TestEnsembleSerialization:
         assert isinstance(loaded_ens.data, dd.DataFrame)
 
         # Verify a subset
-        orig_subset = ens.data.head(10).sort_values(by=["x", "y"]).reset_index(drop=True)
-        loaded_subset = loaded_ens.data.head(10).sort_values(by=["x", "y"]).reset_index(drop=True)
+        orig_subset = (
+            ens.data.head(10).sort_values(by=["x", "y"]).reset_index(drop=True)
+        )
+        loaded_subset = (
+            loaded_ens.data.head(10).sort_values(by=["x", "y"]).reset_index(drop=True)
+        )
         pd.testing.assert_frame_equal(orig_subset, loaded_subset)
 
     def test_overwrite_existing_file(self, simple_ensemble, temp_dir):
@@ -417,13 +430,11 @@ class TestEnsembleSerialization:
         simple_ensemble.save(filepath)
 
         # Create different ensemble
-        df = pd.DataFrame(
-            {
-                "a": [1, 2, 3],
-                "b": [4, 5, 6],
-                "new_qty": [7, 8, 9],
-            }
-        )
+        df = pd.DataFrame({
+            "a": [1, 2, 3],
+            "b": [4, 5, 6],
+            "new_qty": [7, 8, 9],
+        })
         ddf = dd.from_pandas(df, npartitions=1)
         axes = [
             SignalAxis(np.array([1, 2, 3]), "a", 0, "-", True),
@@ -484,13 +495,11 @@ class TestRoundTripConsistency:
     def test_ensemble_multiple_roundtrips(self, temp_dir):
         """Test that Ensemble survives multiple save/load cycles"""
         # Create initial Ensemble
-        df = pd.DataFrame(
-            {
-                "x": [1.0, 2.0, 3.0],
-                "y": [4.0, 5.0, 6.0],
-                "val": [7.0, 8.0, 9.0],
-            }
-        )
+        df = pd.DataFrame({
+            "x": [1.0, 2.0, 3.0],
+            "y": [4.0, 5.0, 6.0],
+            "val": [7.0, 8.0, 9.0],
+        })
         ddf = dd.from_pandas(df, npartitions=1)
         axes = [
             SignalAxis(np.array([1.0, 2.0, 3.0]), "x", 0, "nm", True),

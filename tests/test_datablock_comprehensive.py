@@ -3,17 +3,18 @@ Comprehensive unit tests for DataBlock class from eels_base/ndlib/BaseStructures
 This test suite thoroughly tests all methods and edge cases of the DataBlock class.
 """
 
-import pytest
-import numpy as np
-import dask.array as da
-import sys
 import os
+import sys
+
+import dask.array as da
+import numpy as np
+import pytest
 
 # Add the parent directory to the path to import eels_base
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from NDLib.AxesStructures import CategoricalAxis, SignalAxis, UnorderedSignalAxis
 from NDLib.BaseStructures import DataBlock
-from NDLib.AxesStructures import SignalAxis, UnorderedSignalAxis, CategoricalAxis
 
 
 class TestDataBlockInitialization:
@@ -298,7 +299,18 @@ class TestDataBlockGetMethod:
         ]
         db = DataBlock(data, axes)
 
-        mask = np.array([True, False, True, False, True, False, True, False, True, False])
+        mask = np.array([
+            True,
+            False,
+            True,
+            False,
+            True,
+            False,
+            True,
+            False,
+            True,
+            False,
+        ])
         result = db.get({"x": mask})
         assert result.axes[0].size == 5
 
@@ -502,7 +514,9 @@ class TestDataBlockWithDifferentAxisTypes:
         """Test DataBlock with UnorderedSignalAxis"""
         data = da.from_array(np.random.rand(10, 20), chunks=(5, 10))
         axes = [
-            UnorderedSignalAxis(np.array([1, 5, 2, 8, 3, 9, 4, 7, 6, 0]), "x", 0, "nm", True),
+            UnorderedSignalAxis(
+                np.array([1, 5, 2, 8, 3, 9, 4, 7, 6, 0]), "x", 0, "nm", True
+            ),
             SignalAxis(np.arange(20), "y", 1, "nm", True),
         ]
         db = DataBlock(data, axes)

@@ -1,34 +1,29 @@
 # pyright: basic
-from typing import (
-    Callable,
-    Literal,
-    Optional,
-    Self,
-    Sequence,
-    TypeAlias,
-    Iterable,
-    Generator,
-)
+from collections.abc import Callable, Generator, Iterable, Sequence
 from copy import deepcopy
-from pathlib import Path
 import json
-
-from .AxesStructures import SignalAxis, UnorderedSignalAxis, CategoricalAxis
-from .Types import Number, Axis1D
-from .IndexingUtils import (
-    parse_inequality_to_mask,
-    parse_inequality_to_query,
-    parse_categorical_to_mask,
-    parse_categorical_to_query,
+from pathlib import Path
+from typing import (
+    Literal,
+    Self,
+    TypeAlias,
 )
 
-import numpy as np
 import dask.array as da
 import dask.dataframe as dd
-import zarr
-
+import numpy as np
 import pandas as pd
 import sparse
+import zarr
+
+from .AxesStructures import CategoricalAxis, SignalAxis, UnorderedSignalAxis
+from .IndexingUtils import (
+    parse_categorical_to_mask,
+    parse_categorical_to_query,
+    parse_inequality_to_mask,
+    parse_inequality_to_query,
+)
+from .Types import Axis1D, Number
 
 AxisLike: TypeAlias = SignalAxis | UnorderedSignalAxis | CategoricalAxis
 TwoSeriesOperation: TypeAlias = Callable[[pd.Series, pd.Series], pd.Series]
@@ -128,6 +123,8 @@ class DataBlock:
         """
         if not self.has_axis(axis_name):
             raise RuntimeError(f"{self} has no axis: {axis_name}")
+        if self.axes[target_index].name == axis_name:
+            print(f'Skipping: {axis_name} already at index {target_index}')
 
         old_axes = deepcopy(self.axes)
         old_index = self.axis_obj(axis_name).index_in_array
@@ -277,8 +274,8 @@ class DataBlock:
     def iter_axis(
         self,
         axis_name: str,
-        min_idx: Optional[int] = None,
-        max_idx: Optional[int] = None,
+        min_idx: int | None = None,
+        max_idx: int | None = None,
     ) -> Generator:
         if self.has_axis(axis_name):
             axis_idx = self.axis_obj(axis_name).index_in_array
@@ -456,9 +453,7 @@ class DataBlock:
     def reduce_axis(
         self,
         axis_name: str,
-        reducer: Callable[
-            np.ndarray[tuple[Literal[1]], np.dtype[np.floating | np.integer]], Number
-        ] = lambda s: s.max(),
+        reducer: Callable = lambda s: s.max(),
         out_quantity: str = "q",
         out_unit: str = "-",
     ) -> Self:
@@ -546,17 +541,19 @@ class DataBlock:
 
             # Case 2: Boolean array or list
             elif isinstance(selector, (list, np.ndarray, da.Array)):
+                print(axis_obj, type(axis_obj))
                 mask = np.array(selector) if isinstance(selector, list) else selector
-
                 if len(mask) != axis_obj.size:
                     raise ValueError(
                         f"Mask length ({len(mask)}) doesn't match axis '{axis_name}' size ({axis_obj.size})"
                     )
             else:
+                print(axis_obj, type(axis_obj))
                 raise TypeError(
                     f"Selector for axis '{axis_name}' must be string or boolean array, got {type(selector)}"
                 )
 
+            print(mask)
             # Apply mask to data
             new_data = da.compress(condition=mask, a=new_data, axis=axis_idx)
 
@@ -1021,10 +1018,9 @@ class Ensemble:
     def axis_obj(self, axis_name: str) -> SignalAxis | UnorderedSignalAxis:
         if not self.has_axis(axis_name):
             raise ValueError(f"{self} has no axis: {axis_name}")
-        else:
-            for axis in self.axes:
-                if axis.name == axis_name:
-                    return axis
+        for axis in self.axes:
+            if axis.name == axis_name:
+                return axis
         raise RuntimeError("Should not reach here")
 
     def axis(self, axis_name: str) -> Axis1D:
@@ -1115,13 +1111,11 @@ class Ensemble:
         sort_axes = [axis.name for axis in self.axes] + [rebin_axis]
         sort_axes.remove(relevant_axis.name)
 
-        new_view = self.data.assign(
-            **{
-                rebin_axis: self.data[relevant_axis.name].map_partitions(
-                    pd.cut, bins=bin_edges_, include_lowest=True, labels=False
-                )
-            }
-        )
+        new_view = self.data.assign(**{
+            rebin_axis: self.data[relevant_axis.name].map_partitions(
+                pd.cut, bins=bin_edges_, include_lowest=True, labels=False
+            )
+        })
         new_view = new_view.dropna()
         new_view = (
             new_view.groupby(sort_axes, observed=True)[self.quantity]
@@ -1195,13 +1189,11 @@ class Ensemble:
         sort_axes = [axis.name for axis in self.axes] + [rebin_axis]
         sort_axes.remove(relevant_axis.name)
 
-        new_view = self.data.assign(
-            **{
-                rebin_axis: self.data[relevant_axis.name].map_partitions(
-                    pd.cut, bins=bin_edges_, include_lowest=True, labels=False
-                )
-            }
-        )
+        new_view = self.data.assign(**{
+            rebin_axis: self.data[relevant_axis.name].map_partitions(
+                pd.cut, bins=bin_edges_, include_lowest=True, labels=False
+            )
+        })
 
         new_view = new_view.dropna()
 
@@ -1281,13 +1273,11 @@ class Ensemble:
         rebin_axis = relevant_axis.name + "_bin"
 
         # Assign bin indices
-        new_view = self.data.assign(
-            **{
-                rebin_axis: self.data[relevant_axis.name].map_partitions(
-                    pd.cut, bins=bin_edges_, include_lowest=True, labels=False
-                )
-            }
-        )
+        new_view = self.data.assign(**{
+            rebin_axis: self.data[relevant_axis.name].map_partitions(
+                pd.cut, bins=bin_edges_, include_lowest=True, labels=False
+            )
+        })
 
         # Replace axis values with bin centers
         def _mapper_func(i):
@@ -1344,9 +1334,9 @@ class Ensemble:
         values = self.data[self.quantity].to_dask_array(lengths=True).rechunk()
         coords = da.stack(
             [
-                ((self.data[axis.name] - axis.min) / axis.scale).astype(np.uint16).to_dask_array(
-                    lengths=True
-                )
+                ((self.data[axis.name] - axis.min) / axis.scale)
+                .astype(np.uint16)
+                .to_dask_array(lengths=True)
                 for axis in self.axes
             ],
             axis=0,

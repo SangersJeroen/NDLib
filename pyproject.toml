@@ -15,7 +15,7 @@ version = "0.1.0"
 description = "For the processing of n-dimensional datasets"
 authors = [{ name = "Jeroen Sangers", email = "sangers.jeroen@gmail.com" }]
 readme = "README.md"
-requires-python = "==3.11"
+requires-python = "==3.11.*"
 dependencies = [
     "pydantic>=2.0.0",
     "types-requests",
