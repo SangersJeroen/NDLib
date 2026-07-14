@@ -124,7 +124,7 @@ class DataBlock:
         if not self.has_axis(axis_name):
             raise RuntimeError(f"{self} has no axis: {axis_name}")
         if self.axes[target_index].name == axis_name:
-            print(f'Skipping: {axis_name} already at index {target_index}')
+            print(f"Skipping: {axis_name} already at index {target_index}")
 
         old_axes = deepcopy(self.axes)
         old_index = self.axis_obj(axis_name).index_in_array
@@ -389,7 +389,11 @@ class DataBlock:
         return type(self)(keep_values, new_axes, self.quantity, self.unit)
 
     def rebin_reduce_axis(
-        self, axis_name: str, new_binsize: Number, reducer: Callable = da.mean
+        self,
+        axis_name: str,
+        new_binsize: Number | None = None,
+        bin_edges: None | np.ndarray[tuple[int,], np.dtype] = None,
+        reducer: Callable = da.mean,
     ) -> Self:
         """Rebins axis with `axis_name` such that the new spacing of the points
         of the axis are roughly `new_binsize`. The multiple datapoints in the
@@ -409,45 +413,52 @@ class DataBlock:
         for axis in self.axes:
             if axis.name == axis_name:
                 relevant_axis: AxisLike = axis
-        if not new_binsize > relevant_axis.scale:
-            raise RuntimeError(
-                f"Rebin to reduce, new binsize {new_binsize} is not smaller than current axis spacing {relevant_axis.scale}"
+
+        if bin_edges is None:
+            if new_binsize is None:
+                raise RuntimeError("Both 'new_binsize' and 'bin_edges' are None")
+            if not new_binsize > relevant_axis.scale:
+                raise RuntimeError(
+                    f"Rebin to reduce, new binsize {new_binsize} is not smaller than current axis spacing {relevant_axis.scale}"
+                )
+
+            num_bins = int(
+                np.floor((relevant_axis.max - relevant_axis.min) / new_binsize)
+            )
+            bin_edges = np.linspace(
+                relevant_axis.min - 1e-3, relevant_axis.max + 1e-3, num_bins + 1
             )
 
-        num_bins = int(np.floor((relevant_axis.max - relevant_axis.min) / new_binsize))
-        bin_edges = (
-            np.linspace(relevant_axis.min, relevant_axis.max, num_bins)
-            - new_binsize / 2
-        )
-        bin_centr = np.linspace(relevant_axis.min, relevant_axis.max, num_bins)
+        # 'Safety' padding has proven to be necessary
+        bin_edges[0] = bin_edges[0] - 1e-3
+        bin_edges[-1] = bin_edges[-1] + 1e-3
+        bin_centers = bin_edges[1:] - (bin_edges[1:] - bin_edges[:-1]) / 2
 
         groups = np.digitize(relevant_axis.points, bins=bin_edges, right=True)
 
+        seq = []
+        new_axis_points = []
+        for group in np.unique(groups):
+            if group == len(bin_centers):
+                continue # Values are to the right of final bin_edge
+            if group == 0:
+                continue # Values are to the left of first bin_edge
+            mask = groups == group
+            view = da.take(self.data, indices=mask, axis=relevant_axis.index_in_array)
+            if len(view) > 0:
+                new_axis_points.append(bin_centers[group-1])
+            seq.append(reducer(view, axis=relevant_axis.index_in_array))
+        new_view = da.stack(seq=seq, axis=relevant_axis.index_in_array)
+
         new_axis = SignalAxis(
-            axis_points=bin_centr,
+            axis_points=np.array(new_axis_points),
             name=relevant_axis.name,
             index_in_array=relevant_axis.index_in_array,
             unit=relevant_axis.unit,
             navigate=relevant_axis.is_nav,
         )
-
         new_axes = deepcopy(self.axes)
         new_axes[relevant_axis.index_in_array] = new_axis
-
-        new_view = da.stack(
-            seq=[
-                reducer(
-                    da.take(
-                        self.data,
-                        indices=(groups == i),
-                        axis=relevant_axis.index_in_array,
-                    ),
-                    axis=new_axis.index_in_array,
-                )
-                for i in np.unique(groups)
-            ],
-            axis=new_axis.index_in_array,
-        )
         return type(self)(new_view, new_axes)
 
     def reduce_axis(
@@ -980,7 +991,8 @@ class Ensemble:
             new_axes.append(new_axis)
         axes = new_axes
         coord_block = (
-            da.stack([mgrid[i].flatten() for i in range(len(axes))] + [data])
+            da
+            .stack([mgrid[i].flatten() for i in range(len(axes))] + [data])
             .rechunk({0: -1, 1: "auto"})
             .T
         )
@@ -1067,7 +1079,8 @@ class Ensemble:
         sort_axes.remove(relevant_axis.name)
 
         new_view = (
-            self.data.groupby(sort_axes, observed=True)[self.quantity]
+            self.data
+            .groupby(sort_axes, observed=True)[self.quantity]
             .agg(reducer)
             .reset_index()
         )
@@ -1118,7 +1131,8 @@ class Ensemble:
         })
         new_view = new_view.dropna()
         new_view = (
-            new_view.groupby(sort_axes, observed=True)[self.quantity]
+            new_view
+            .groupby(sort_axes, observed=True)[self.quantity]
             .agg(list, meta=(self.quantity, "float64"))
             .reset_index()
         )
