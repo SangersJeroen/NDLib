@@ -134,6 +134,7 @@ ignore = [
     "E501",    # Line too long (formatter handles this)
     "S603",    # subprocess without shell=True (too strict)
     "S607",    # Starting a process with a partial path (too strict)
+    "PLR0904"
 ]
 
 # Complexity limits (anti-LLM-slop)

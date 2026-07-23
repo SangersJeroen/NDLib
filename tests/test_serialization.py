@@ -319,7 +319,8 @@ class TestEnsembleSerialization:
         # Compare actual data values
         pd.testing.assert_frame_equal(
             loaded_ens.data.compute().sort_values(by=["x", "y"]).reset_index(drop=True),
-            simple_ensemble.data.compute()
+            simple_ensemble.data
+            .compute()
             .sort_values(by=["x", "y"])
             .reset_index(drop=True),
         )
@@ -337,7 +338,8 @@ class TestEnsembleSerialization:
         # Compare actual data values
         pd.testing.assert_frame_equal(
             loaded_ens.data.compute().sort_values(by=["x", "y"]).reset_index(drop=True),
-            simple_ensemble.data.compute()
+            simple_ensemble.data
+            .compute()
             .sort_values(by=["x", "y"])
             .reset_index(drop=True),
         )
@@ -373,7 +375,8 @@ class TestEnsembleSerialization:
 
         # Compare data
         orig_df = (
-            complex_ensemble.data.compute()
+            complex_ensemble.data
+            .compute()
             .sort_values(by=["x", "y"])
             .reset_index(drop=True)
         )

@@ -433,6 +433,10 @@ class DataBlock:
         for axis in self.axes:
             if axis.name == axis_name:
                 relevant_axis: AxisLike = axis
+        if isinstance(relevant_axis, CategoricalAxis):
+            raise RuntimeError(
+                f"Method not implemented for axis CategoricalAxis {axis_name}"
+            )
 
         if bin_edges is None:
             bin_edges, bin_centers = compute_binning(
@@ -848,13 +852,13 @@ class Ensemble:
 
     def __init__(
         self,
-        data: dd.DataFrame,
-        axes: list[UnorderedSignalAxis | SignalAxis],
+        data: dd.DataFrame | pd.DataFrame,
+        axes: list[UnorderedSignalAxis | SignalAxis | CategoricalAxis],
         quantity: str = "q",
         unit: str = "-",
     ):
-        self.data: dd.DataFrame = data
-        self.axes: list[UnorderedSignalAxis | SignalAxis] = axes
+        self.data: dd.DataFrame | pd.DataFrame = data
+        self.axes: list[UnorderedSignalAxis | SignalAxis | CategoricalAxis] = axes
         self.dims: int = len(axes)
         self.quantity: str = quantity
         self.unit: str = unit
@@ -975,14 +979,14 @@ class Ensemble:
 
     @classmethod
     def from_datablock(cls, datablock: DataBlock) -> Self:  # type: ignore
-        data = datablock.data.flatten()
-        axes = datablock.axes
+        data: da.Array | np.ndarray = datablock.data.flatten()
+        axes: list[SignalAxis | CategoricalAxis] = datablock.axes
         quantity = datablock.quantity
         unit = datablock.unit
         mgrid = da.meshgrid(*[axis.points for axis in axes], indexing="ij")
 
-        new_axes = []
-        for i, axis in enumerate(datablock.axes):
+        new_axes: list[SignalAxis | CategoricalAxis] = []
+        for _, axis in enumerate(datablock.axes):
             new_axis = SignalAxis(
                 axis_points=axis.points,
                 name=axis.name,
@@ -990,16 +994,17 @@ class Ensemble:
                 unit=axis.unit,
                 navigate=axis.is_nav,
             )
-            new_axis.scale = axis.scale
+            if isinstance(axis, SignalAxis):
+                new_axis.scale = axis.scale
             new_axes.append(new_axis)
-        axes = new_axes
-        coord_block = (
+        axes: list[SignalAxis | CategoricalAxis] = new_axes
+        coord_block: da.Array = (
             da
             .stack([mgrid[i].flatten() for i in range(len(axes))] + [data])
             .rechunk({0: -1, 1: "auto"})
             .T
         )
-        data = dd.io.from_dask_array(
+        data: dd.DataFrame = dd.io.from_dask_array(
             coord_block, columns=[axis.name for axis in axes] + [quantity]
         )
         return Ensemble(data, axes, quantity, unit)  # type: ignore
@@ -1025,12 +1030,9 @@ class Ensemble:
         return type(self)(new_data, self.axes, self.quantity, self.unit)
 
     def has_axis(self, axis_name: str) -> bool:
-        for axis in self.axes:
-            if axis.name == axis_name:
-                return True
-        return False
+        return any(axis.name == axis_name for axis in self.axes)
 
-    def axis_obj(self, axis_name: str) -> SignalAxis | UnorderedSignalAxis:
+    def axis_obj(self, axis_name: str) -> AxisLike:
         if not self.has_axis(axis_name):
             raise ValueError(f"{self} has no axis: {axis_name}")
         for axis in self.axes:
@@ -1038,13 +1040,15 @@ class Ensemble:
                 return axis
         raise RuntimeError("Should not reach here")
 
-    def axis(self, axis_name: str) -> Axis1D:
+    def axis(self, axis_name: str) -> Axis1D | None:
         if not self.has_axis(axis_name):
             raise RuntimeError(f"{self} has no axis {axis_name}")
 
         for axis in self.axes:
             if axis.name == axis_name:
                 return axis.points
+
+        return None
 
     def reduce_axis(
         self,
@@ -1094,34 +1098,24 @@ class Ensemble:
         self,
         axis_name: str,
         new_binsize: Number | None = None,
-        bin_edges: Sequence[Number] | None = None,
+        bin_edges: Axis1D | None = None,
         reducer: Callable = da.mean,
     ) -> Self:
         if not self.has_axis(axis_name):
             raise RuntimeError(f"{self} has no axis {axis_name}")
-        for axis in self.axes:
-            if axis.name == axis_name:
-                relevant_axis: AxisLike = axis
 
-        if bin_edges is None and new_binsize is not None:
-            num_bins = int(
-                np.floor((relevant_axis.max - relevant_axis.min + 0.02) / new_binsize)
+        relevant_axis: AxisLike = self.axis_obj(axis_name)
+        if isinstance(relevant_axis, CategoricalAxis):
+            raise RuntimeError(
+                f"Method not implemented for axis CategoricalAxis {axis_name}"
             )
-            bin_edges_: np.ndarray[
-                tuple[Literal[1],], np.dtype[np.float64 | np.int16]
-            ] = np.linspace(
-                relevant_axis.min - 0.01 - new_binsize,
-                relevant_axis.max + 0.01 + new_binsize,
-                num_bins,
+
+        if bin_edges is None:
+            bin_edges, bin_centers = compute_binning(
+                relevant_axis, bin_edges, new_binsize
             )
-            bin_centers = np.linspace(
-                relevant_axis.min - 0.01 + new_binsize / 2,
-                relevant_axis.max + 0.01 - new_binsize / 2,
-                num_bins - 1,
-            )
-        elif bin_edges is not None:
-            bin_edges_ = np.array(bin_edges)
-            bin_centers = bin_edges[1:] - (bin_edges_[1:] - bin_edges_[:-1]) / 2
+        bin_edges: np.ndarray[tuple[int], np.dtype]
+        bin_centers: np.ndarray[tuple[int], np.dtype]
 
         rebin_axis = relevant_axis.name + "_bin"
         sort_axes = [axis.name for axis in self.axes] + [rebin_axis]
@@ -1129,7 +1123,7 @@ class Ensemble:
 
         new_view = self.data.assign(**{
             rebin_axis: self.data[relevant_axis.name].map_partitions(
-                pd.cut, bins=bin_edges_, include_lowest=True, labels=False
+                pd.cut, bins=bin_edges, include_lowest=True, labels=False
             )
         })
         new_view = new_view.dropna()
@@ -1144,13 +1138,9 @@ class Ensemble:
             reducer, meta=(relevant_axis.name, "float64")
         )
 
-        def _mapper_func(i):
-            if np.isnan(i):
-                return 1_000_000
-            return bin_centers[int(i)]
-
-        new_view[relevant_axis.name] = new_view[rebin_axis].apply(
-            _mapper_func, meta=(relevant_axis.name, "float64")
+        mapping: dict[int, float] = dict(enumerate(bin_centers))
+        new_view[relevant_axis.name] = new_view[rebin_axis].map(
+            mapping, meta=(relevant_axis.name, "float64")
         )
         new_view = new_view.drop(columns=rebin_axis)
 
@@ -1174,33 +1164,18 @@ class Ensemble:
         if not self.has_axis(axis_name):
             raise RuntimeError(f"{self} has no axis {axis_name}")
 
-        assert new_binsize is not None or bin_edges is not None, (
-            "Either call with new_binsize= or bin_edges="
-        )
+        relevant_axis: AxisLike = self.axis_obj(axis_name)
+        if isinstance(relevant_axis, CategoricalAxis):
+            raise RuntimeError(
+                f"Method not implemented for axis CategoricalAxis {axis_name}"
+            )
 
-        for axis in self.axes:
-            if axis.name == axis_name:
-                relevant_axis: AxisLike = axis
-
-        if bin_edges is None and new_binsize is not None:
-            num_bins = int(
-                np.floor((relevant_axis.max - relevant_axis.min + 0.02) / new_binsize)
+        if bin_edges is None:
+            bin_edges, bin_centers = compute_binning(
+                relevant_axis, bin_edges, new_binsize
             )
-            bin_edges_: np.ndarray[
-                tuple[Literal[1],], np.dtype[np.float64 | np.int16]
-            ] = np.linspace(
-                relevant_axis.min - 0.01 - new_binsize,
-                relevant_axis.max + 0.01 + new_binsize,
-                num_bins,
-            )
-            bin_centers = np.linspace(
-                relevant_axis.min - 0.01 + new_binsize / 2,
-                relevant_axis.max + 0.01 - new_binsize / 2,
-                num_bins - 1,
-            )
-        elif bin_edges is not None:
-            bin_edges_ = np.array(bin_edges)
-            bin_centers = bin_edges[1:] - (bin_edges_[1:] - bin_edges_[:-1]) / 2
+        bin_edges: np.ndarray[tuple[int], np.dtype]
+        bin_centers: np.ndarray[tuple[int], np.dtype]
 
         rebin_axis = relevant_axis.name + "_bin"
         sort_axes = [axis.name for axis in self.axes] + [rebin_axis]
@@ -1210,7 +1185,7 @@ class Ensemble:
             self.data: dd.DataFrame
             new_view = self.data.assign(**{
                 rebin_axis: self.data[relevant_axis.name].map_partitions(
-                    pd.cut, bins=bin_edges_, include_lowest=True, labels=False
+                    pd.cut, bins=bin_edges, include_lowest=True, labels=False
                 )
             })
         else:
@@ -1218,7 +1193,7 @@ class Ensemble:
             new_view = self.data.assign(**{
                 rebin_axis: pd.cut(
                     self.data[relevant_axis.name],
-                    bins=bin_edges_,
+                    bins=bin_edges,
                     include_lowest=True,
                     labels=False,
                 )
@@ -1228,10 +1203,8 @@ class Ensemble:
 
         mapping: dict[int, float] = dict(enumerate(bin_centers))
         if isinstance(new_view, dd.DataFrame):
-            new_view[relevant_axis.name]: dd.DataFrame = (
-                new_view[rebin_axis]
-                .map(mapping, meta=(relevant_axis.name, "float64"))
-                .fillna(1_000_000)
+            new_view[relevant_axis.name]: dd.DataFrame = new_view[rebin_axis].map(
+                mapping, meta=(relevant_axis.name, "float64")
             )
         else:
             new_view[relevant_axis.name]: pd.DataFrame = (
@@ -1248,10 +1221,7 @@ class Ensemble:
             unit=relevant_axis.unit,
             navigate=relevant_axis.is_nav,
         )
-
-        new_axes[relevant_axis.index_in_array].scale = (
-            new_binsize if not None else bin_centers[2] - bin_centers[1]
-        )
+        new_axes[relevant_axis.index_in_array].scale = new_binsize
 
         return type(self)(new_view, new_axes, self.quantity, self.unit)
 
@@ -1259,7 +1229,7 @@ class Ensemble:
         self,
         axis_name: str,
         new_binsize: Number | None = None,
-        bin_edges: Sequence[Number] | None = None,
+        bin_edges: Axis1D | None = None,
     ) -> Self:
         """Rebin axis to discrete values and add repetition counter axis.
 
@@ -1287,43 +1257,28 @@ class Ensemble:
             if axis.name == axis_name:
                 relevant_axis: AxisLike = axis
 
-        if bin_edges is None and new_binsize is not None:
-            num_bins = int(
-                np.floor((relevant_axis.max - relevant_axis.min + 0.02) / new_binsize)
+        if isinstance(relevant_axis, CategoricalAxis):
+            raise RuntimeError(
+                f"Method not implemented for axis CategoricalAxis {axis_name}"
             )
-            bin_edges_: np.ndarray[
-                tuple[Literal[1],], np.dtype[np.float64 | np.int16]
-            ] = np.linspace(
-                relevant_axis.min - 0.01 - new_binsize,
-                relevant_axis.max + 0.01 + new_binsize,
-                num_bins,
-            )
-            bin_centers = np.linspace(
-                relevant_axis.min - 0.01 + new_binsize / 2,
-                relevant_axis.max + 0.01 - new_binsize / 2,
-                num_bins - 1,
-            )
-        elif bin_edges is not None:
-            bin_edges_ = np.array(bin_edges)
-            bin_centers = bin_edges_[1:] - bin_edges_[:-1]
+
+        bin_edges, bin_centers = compute_binning(relevant_axis, bin_edges, new_binsize)
+        bin_edges: np.ndarray[tuple[int], np.dtype]
+        bin_centers: np.ndarray[tuple[int], np.dtype]
 
         rebin_axis = relevant_axis.name + "_bin"
 
         # Assign bin indices
         new_view = self.data.assign(**{
             rebin_axis: self.data[relevant_axis.name].map_partitions(
-                pd.cut, bins=bin_edges_, include_lowest=True, labels=False
+                pd.cut, bins=bin_edges, include_lowest=True, labels=False
             )
-        })
+        }).dropna()
 
-        # Replace axis values with bin centers
-        def _mapper_func(i):
-            if np.isnan(i):
-                return 1_000_000
-            return bin_centers[int(i)]
+        mapping = dict(enumerate(bin_centers))
 
-        new_view[relevant_axis.name] = new_view[rebin_axis].apply(
-            _mapper_func, meta=(relevant_axis.name, "float64")
+        new_view[relevant_axis.name] = new_view[rebin_axis].map(
+            mapping, meta=(relevant_axis.name, "float64")
         )
         new_view = new_view.drop(columns=rebin_axis)
 
