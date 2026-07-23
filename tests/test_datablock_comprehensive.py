@@ -3,7 +3,7 @@ Comprehensive unit tests for DataBlock class from eels_base/ndlib/BaseStructures
 This test suite thoroughly tests all methods and edge cases of the DataBlock class.
 """
 
-import os
+import pathlib
 import sys
 
 import dask.array as da
@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 # Add the parent directory to the path to import eels_base
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, pathlib.Path(pathlib.Path(pathlib.Path(__file__).resolve()).parent).parent)
 
 from NDLib.AxesStructures import CategoricalAxis, SignalAxis, UnorderedSignalAxis
 from NDLib.BaseStructures import DataBlock
@@ -499,7 +499,7 @@ class TestDataBlockSplitOperations:
         assert len(result_list) == 10
 
         # Each DataBlock should be 1D after squeezing (size 1 axis removed)
-        for i, split_db in enumerate(result_list):
+        for _i, split_db in enumerate(result_list):
             assert isinstance(split_db, DataBlock)
             # After squeezing size-1 axis, should have only y axis left
             assert split_db.dims == 1
@@ -522,8 +522,8 @@ class TestDataBlockWithDifferentAxisTypes:
         db = DataBlock(data, axes)
 
         assert db.dims == 2
-        assert db.axes[0].ordered == False
-        assert db.axes[1].ordered == True
+        assert not db.axes[0].ordered
+        assert db.axes[1].ordered
 
     def test_with_categorical_axis(self):
         """Test DataBlock with CategoricalAxis"""
@@ -536,7 +536,7 @@ class TestDataBlockWithDifferentAxisTypes:
 
         assert db.dims == 2
         assert db.axes[0].size == 3
-        assert db.axes[0].ordered == False
+        assert not db.axes[0].ordered
 
 
 class TestDataBlockEdgeCases:

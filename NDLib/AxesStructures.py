@@ -21,7 +21,9 @@ class Axis:
         scale: Number; spacing of axis points
     """
 
-    def __init__(self, name: str, index_in_array: int, unit: str, navigate: bool):
+    def __init__(
+        self, name: str, index_in_array: int, unit: str, *, navigate: bool = False
+    ) -> None:
         self.name: str = name
         self.index_in_array: int = index_in_array
         self.unit: str = unit
@@ -64,8 +66,9 @@ class SignalAxis(Axis):
         name: str,
         index_in_array: int,
         unit: str,
+        *,
         navigate: bool = False,
-    ):
+    ) -> None:
         super().__init__(name, index_in_array, unit, navigate)
 
         self.points: Axis1D = np.array(axis_points)
@@ -102,6 +105,9 @@ class SignalAxis(Axis):
             + f"{self.min:.2f} {self.unit} <--------step: {self.scale:.2f} {self.unit}--------> {self.max:.2f} {self.unit}"
         )
 
+    def __hash__(self) -> int:
+        return hash(self.points)
+
 
 class UnorderedSignalAxis(Axis):
     """[TODO:description]
@@ -126,9 +132,10 @@ class UnorderedSignalAxis(Axis):
         name: str,
         index_in_array: int,
         unit: str,
+        *,
         navigate: bool = False,
-    ):
-        super().__init__(name, index_in_array, unit, navigate)
+    ) -> None:
+        super().__init__(name, index_in_array, unit, navigate=navigate)
 
         self.points: Axis1D = axis_points
         self.binned: bool = False
@@ -136,7 +143,7 @@ class UnorderedSignalAxis(Axis):
         self.ordered = False
         self.__post_init__()
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.size: int = len(self.points)
         self.min: Number = self.points.min()
         self.max: Number = self.points.max()
@@ -163,6 +170,9 @@ class UnorderedSignalAxis(Axis):
             self.points = self.points[self.points < max]
             self.__post_init__()
 
+    def __hash__(self) -> int:
+        return hash(self.points)
+
 
 class CategoricalAxis(Axis):
     """Axis of categories (strings)
@@ -181,8 +191,9 @@ class CategoricalAxis(Axis):
         name: str,
         index_in_array: int,
         unit: str,
+        *,
         navigate: bool = False,
-    ):
+    ) -> None:
         super().__init__(name, index_in_array, unit, navigate)
 
         if categories == []:
@@ -204,3 +215,6 @@ class CategoricalAxis(Axis):
     def __eq__(self, value: str, /) -> np.ndarray[Literal[1], np.dtype[np.bool_]]:
         points: np.ndarray[Literal[1], np.dtype[Number | np.str_]] = self.points
         return np.equal(points, value)
+
+    def __hash__(self) -> int:
+        return hash(self.points)

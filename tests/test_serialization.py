@@ -3,7 +3,7 @@ Comprehensive tests for DataBlock and Ensemble serialization methods.
 Tests save/load functionality including lazy loading support.
 """
 
-import os
+import pathlib
 import sys
 
 import dask.array as da
@@ -13,7 +13,7 @@ import pandas as pd
 import pytest
 
 # Add the parent directory to the path to import eels_base
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, pathlib.Path(pathlib.Path(pathlib.Path(__file__).resolve()).parent).parent)
 
 from NDLib.AxesStructures import CategoricalAxis, SignalAxis, UnorderedSignalAxis
 from NDLib.BaseStructures import DataBlock, Ensemble
@@ -124,7 +124,7 @@ class TestDataBlockSerialization:
 
         loaded_db = DataBlock.load(filepath)
 
-        for orig_axis, loaded_axis in zip(simple_datablock.axes, loaded_db.axes):
+        for orig_axis, loaded_axis in zip(simple_datablock.axes, loaded_db.axes, strict=False):
             assert orig_axis.name == loaded_axis.name
             assert orig_axis.index_in_array == loaded_axis.index_in_array
             assert orig_axis.unit == loaded_axis.unit
@@ -351,7 +351,7 @@ class TestEnsembleSerialization:
 
         loaded_ens = Ensemble.load(filepath)
 
-        for orig_axis, loaded_axis in zip(simple_ensemble.axes, loaded_ens.axes):
+        for orig_axis, loaded_axis in zip(simple_ensemble.axes, loaded_ens.axes, strict=False):
             assert orig_axis.name == loaded_axis.name
             assert orig_axis.index_in_array == loaded_axis.index_in_array
             assert orig_axis.unit == loaded_axis.unit

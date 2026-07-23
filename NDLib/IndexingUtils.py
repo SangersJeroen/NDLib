@@ -4,8 +4,13 @@ Utilities for parsing indexing expressions in DataBlock and Ensemble.
 """
 
 import re
+from typing import Literal
 
 import numpy as np
+
+from .Types import Axis1D
+
+type OperatorStr = Literal["<"] | Literal["<="] | Literal[">"] | Literal[">="]
 
 COMPOUND_PATTERN = (
     # Pattern for compound inequalities: -3<=x<3 or 1<x<=5
@@ -13,6 +18,35 @@ COMPOUND_PATTERN = (
 )
 # Pattern for simple inequalities: x>2, x<=5
 SIMPLE_PATTERN = r"^(\w*\s*\w*)\s*([<=>]=?)\s*([+-]?\d+\.?\d*)$"
+
+
+def compound_to_mask(
+    axis_points: Axis1D,
+    val1: float | int,
+    val2: float | int,
+    op1: OperatorStr,
+    op2: OperatorStr,
+) -> np.ndarray[tuple[int], np.dtype[np.bool_]]:
+    # Build compound mask
+    if op1 == "<":
+        mask1 = val1 < axis_points
+    elif op1 == "<=":
+        mask1 = val1 <= axis_points
+    elif op1 == ">":
+        mask1 = val1 > axis_points
+    else:  # '>='
+        mask1 = val1 >= axis_points
+
+    if op2 == "<":
+        mask2 = axis_points < val2
+    elif op2 == "<=":
+        mask2 = axis_points <= val2
+    elif op2 == ">":
+        mask2 = axis_points > val2
+    else:  # '>='
+        mask2 = axis_points >= val2
+
+    return mask1 & mask2
 
 
 def parse_categorical_to_mask(
@@ -56,7 +90,6 @@ def parse_categorical_to_mask(
 
         if op == "==":
             return axis_points == value
-        # '!='
         return axis_points != value
 
     raise ValueError(f"Invalid categorical expression: '{expr}' for axis '{axis_name}'")
@@ -133,40 +166,19 @@ def parse_inequality_to_mask(
         array([False,  True,  True,  True, False])
     """
 
-    global COMPOUND_PATTERN
-    global SIMPLE_PATTERN
-
     # Try compound inequality first
     compound_match = re.match(COMPOUND_PATTERN, expr.strip())
     if compound_match:
+        op1: OperatorStr
+        op2: OperatorStr
+
         val1, op1, var_name, op2, val2 = compound_match.groups()
         if var_name != axis_name:
             raise ValueError(
                 f"Variable '{var_name}' in expression doesn't match axis '{axis_name}'"
             )
 
-        val1, val2 = float(val1), float(val2)
-
-        # Build compound mask
-        if op1 == "<":
-            mask1 = val1 < axis_points
-        elif op1 == "<=":
-            mask1 = val1 <= axis_points
-        elif op1 == ">":
-            mask1 = val1 > axis_points
-        else:  # '>='
-            mask1 = val1 >= axis_points
-
-        if op2 == "<":
-            mask2 = axis_points < val2
-        elif op2 == "<=":
-            mask2 = axis_points <= val2
-        elif op2 == ">":
-            mask2 = axis_points > val2
-        else:  # '>='
-            mask2 = axis_points >= val2
-
-        return mask1 & mask2
+        return compound_to_mask(axis_points, float(val1), float(val2), op1, op2)
 
     # Try simple inequality
     simple_match = re.match(SIMPLE_PATTERN, expr.strip())
@@ -187,7 +199,6 @@ def parse_inequality_to_mask(
             return axis_points > val
         if op == "==":
             return axis_points == val
-        # '>='
         return axis_points >= val
 
     raise ValueError(f"Invalid inequality expression: '{expr}' for axis '{axis_name}'")
@@ -218,9 +229,6 @@ def parse_inequality_to_query(axis_name: str, expr: str) -> str:
         >>> parse_inequality_to_query('e', '-3<=e<3')
         '(-3 <= e) & (e < 3)'
     """
-
-    global COMPOUND_PATTERN
-    global SIMPLE_PATTERN
 
     # Try compound inequality first
     compound_match = re.match(COMPOUND_PATTERN, expr.strip())

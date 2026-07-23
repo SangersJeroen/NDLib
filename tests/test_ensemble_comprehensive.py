@@ -3,7 +3,7 @@ Comprehensive unit tests for Ensemble class from eels_base/ndlib/BaseStructures.
 This test suite thoroughly tests all methods and edge cases of the Ensemble class.
 """
 
-import os
+import pathlib
 import sys
 
 import dask.array as da
@@ -13,7 +13,7 @@ import pandas as pd
 import pytest
 
 # Add the parent directory to the path to import eels_base
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, pathlib.Path(pathlib.Path(pathlib.Path(__file__).resolve()).parent).parent)
 
 from NDLib.AxesStructures import SignalAxis, UnorderedSignalAxis
 from NDLib.BaseStructures import DataBlock, Ensemble
