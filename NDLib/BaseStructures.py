@@ -1,4 +1,3 @@
-# pyright: basic
 from collections.abc import Callable, Generator, Iterable, Sequence
 from copy import deepcopy
 import json
@@ -33,6 +32,27 @@ def return_axis_idx(axis: SignalAxis | UnorderedSignalAxis) -> int:
     return axis.index_in_array
 
 
+def compute_binning(
+    axis: SignalAxis | UnorderedSignalAxis,
+    bin_edges: Axis1D | None = None,
+    bin_size: Number | None = None,
+    eps: float = 1e-4,
+) -> tuple[Axis1D, Axis1D]:
+    if bin_edges is None:
+        if bin_size is None:
+            raise RuntimeError("Both 'new_binsize' and 'bin_edges' are None")
+
+        num_bins = int(np.floor((axis.max - axis.min) / bin_size))
+        bin_edges: Axis1D = np.linspace(axis.min - eps, axis.max + eps, num_bins + 1)
+
+    # 'Safety' padding has proven to be necessary
+    bin_edges[0] -= eps
+    bin_edges[-1] += eps
+    bin_centers: Axis1D = bin_edges[1:] - (bin_edges[1:] - bin_edges[:-1]) / 2
+
+    return bin_edges, bin_centers
+
+
 class DataBlock:
     """Datastructure for n-dimensional structured dataset with coordinate axes.
 
@@ -48,8 +68,8 @@ class DataBlock:
 
     def __init__(
         self,
-        data: da.Array,
-        axes: Iterable[SignalAxis],
+        data: da.Array | np.ndarray,
+        axes: Iterable[SignalAxis | CategoricalAxis],
         quantity: str = "q",
         unit: str = "-",
     ):
@@ -58,10 +78,10 @@ class DataBlock:
             raise RuntimeError("Mismatched number of dimensions in data and axes")
         _shape = data.shape
 
-        axes = sorted(axes, key=return_axis_idx)
+        axes: list[AxisLike] = sorted(axes, key=return_axis_idx)
 
         for i in range(len(axes)):
-            axis = axes[i]
+            axis: AxisLike = axes[i]
             if _shape[i] != len(axis.points):
                 raise RuntimeError(
                     f"Shape along dimension {i} has length {_shape[i]} but axis has length {len(axis.points)}"
@@ -81,8 +101,8 @@ class DataBlock:
                     quantity = axis.name
             axes_list = [axis for axis in axes_list if axis.size > 1]
 
-        self.data: da.Array = data
-        self.axes: list[SignalAxis] = axes_list
+        self.data: da.Array | np.ndarray = data
+        self.axes: list[SignalAxis | CategoricalAxis] = axes_list
         self.dims: int = len(self.data.shape)
         self.quantity: str = quantity
         self.unit: str = unit
@@ -100,14 +120,14 @@ class DataBlock:
 
     def __post_init_db__(self) -> None:
         self.axes.sort(key=return_axis_idx)
-        axis_sizes = [axis.size for axis in self.axes]
-        data_shape = self.data.shape
+        axis_sizes: list[int] = [axis.size for axis in self.axes]
+        data_shape: tuple[int, ...] = self.data.shape
         for dim in range(self.dims):
             if not axis_sizes[dim] == data_shape[dim]:
                 raise RuntimeError(
                     f"Mismatch along dimension {dim}\n{self.axes[dim].name} has length {axis_sizes[dim]} but data has length {data_shape[dim]} along dimension"
                 )
-        self.shape: tuple[int, ...] = tuple([axis.size for axis in self.axes])
+        self.shape: tuple[int, ...] = tuple(axis.size for axis in self.axes)
 
     def reorder_axis(self, axis_name: str, target_index: int) -> None:
         """
@@ -128,7 +148,7 @@ class DataBlock:
 
         old_axes = deepcopy(self.axes)
         old_index = self.axis_obj(axis_name).index_in_array
-        if not self.axes[target_index].name == axis_name:
+        if self.axes[target_index].name != axis_name:
             axis_at_target = old_axes[target_index]
 
             old_axes[target_index] = self.axes[old_index]
@@ -151,7 +171,7 @@ class DataBlock:
             np.ndarray; computed data
         """
         if not self._computed:
-            self.data = self.data.compute()
+            self.data: da.Array = self.data.compute()
             self._computed = True
         return self.data
 
@@ -173,7 +193,7 @@ class DataBlock:
             zarr.save_array(data_path, self.data, overwrite=True)
 
         # Save axes information
-        axes_data = []
+        axes_data: list[AxisLike] = []
         for axis in self.axes:
             axis_dict = {
                 "type": type(axis).__name__,
@@ -392,7 +412,7 @@ class DataBlock:
         self,
         axis_name: str,
         new_binsize: Number | None = None,
-        bin_edges: None | np.ndarray[tuple[int,], np.dtype] = None,
+        bin_edges: np.ndarray[tuple[int,], np.dtype] | None = None,
         reducer: Callable = da.mean,
     ) -> Self:
         """Rebins axis with `axis_name` such that the new spacing of the points
@@ -415,24 +435,11 @@ class DataBlock:
                 relevant_axis: AxisLike = axis
 
         if bin_edges is None:
-            if new_binsize is None:
-                raise RuntimeError("Both 'new_binsize' and 'bin_edges' are None")
-            if not new_binsize > relevant_axis.scale:
-                raise RuntimeError(
-                    f"Rebin to reduce, new binsize {new_binsize} is not smaller than current axis spacing {relevant_axis.scale}"
-                )
-
-            num_bins = int(
-                np.floor((relevant_axis.max - relevant_axis.min) / new_binsize)
+            bin_edges, bin_centers = compute_binning(
+                relevant_axis, bin_edges, new_binsize
             )
-            bin_edges = np.linspace(
-                relevant_axis.min - 1e-3, relevant_axis.max + 1e-3, num_bins + 1
-            )
-
-        # 'Safety' padding has proven to be necessary
-        bin_edges[0] = bin_edges[0] - 1e-3
-        bin_edges[-1] = bin_edges[-1] + 1e-3
-        bin_centers = bin_edges[1:] - (bin_edges[1:] - bin_edges[:-1]) / 2
+        bin_edges: np.ndarray[tuple[int], np.dtype]
+        bin_centers: np.ndarray[tuple[int], np.dtype]
 
         groups = np.digitize(relevant_axis.points, bins=bin_edges, right=True)
 
@@ -564,7 +571,6 @@ class DataBlock:
                     f"Selector for axis '{axis_name}' must be string or boolean array, got {type(selector)}"
                 )
 
-            print(mask)
             # Apply mask to data
             new_data = da.compress(condition=mask, a=new_data, axis=axis_idx)
 
@@ -611,17 +617,16 @@ class DataBlock:
                 - quantity_data: dask.array.Array with filtered quantity values
                 - axes_dict: dict mapping axis names to their numpy arrays
         """
-        if not isinstance(indexing, dict):
-            raise TypeError(f"Expected dict, got {type(indexing)}")
-
         if len(indexing) == 0:
             # No filtering, return all data
-            axes_dict = {axis.name: axis.points for axis in self.axes}
+            axes_dict: dict[str, Axis1D] = {
+                axis.name: axis.points for axis in self.axes
+            }
             return self.data, axes_dict
 
         # Start with current data and axes
-        new_data = self.data
-        new_axes = deepcopy(self.axes)
+        new_data: da.Array | np.ndarray = self.data
+        new_axes: list[SignalAxis | CategoricalAxis] = deepcopy(self.axes)
 
         # Process each axis in the indexing dict
         for axis_name, selector in indexing.items():
@@ -711,7 +716,7 @@ class DataBlock:
             with split_on_axis('x') will yield a list with 10 DataBlocks all
             with size (1, 20, 400)
         """
-        split_blocks: list[Self] = list()
+        split_blocks: list[Self] = []
         split_axis: AxisLike = self.axis_obj(axis_name)
         if isinstance(split_axis, UnorderedSignalAxis):
             print(
@@ -728,7 +733,7 @@ class DataBlock:
                 unit=split_axis.unit,
                 navigate=False,
             )
-            new_axes: list[AxisLike] = deepcopy(self.axes)
+            new_axes: list[SignalAxis | CategoricalAxis] = deepcopy(self.axes)
             new_axes[new_axis.index_in_array] = new_axis
             new_data = da.take(
                 self.data, indices=(split_coords == val), axis=new_axis.index_in_array
@@ -780,12 +785,12 @@ class DataBlock:
                 missing.append(axis.index_in_array)
 
         if _drop_any:
-            new_axes: list[AxisLike] = []
+            new_axes: list[SignalAxis | CategoricalAxis] = []
             for axis in self.axes:
                 if axis.name not in drop_axes:
                     new_axes.append(deepcopy(axis))
         elif not _drop_any:
-            new_axes = deepcopy(self.axes)
+            new_axes: list[SignalAxis | CategoricalAxis] = deepcopy(self.axes)
 
         for i, axis in enumerate(new_axes):
             axis.index_in_array = i
@@ -803,7 +808,10 @@ class DataBlock:
             if _drop_any:
                 matching = self.data[mask]
                 matching.compute_chunk_sizes()
-                new_data = matching.reshape(new_shape + (-1,)).rechunk({0: -1})
+                new_data = matching.reshape((
+                    *new_shape,
+                    -1,
+                )).rechunk({0: -1})
                 new_axis = SignalAxis(
                     axis_points=np.arange(new_data.shape[-1]),
                     name="repetition",
@@ -826,11 +834,6 @@ class DataBlock:
                     type(self)(
                         new_data, new_axes, quantity=self.quantity, unit=self.unit
                     )
-                )
-
-            else:
-                raise RuntimeError(
-                    "Code should be unreachable, check `drop_axes` input matches signature"
                 )
         return split_blocks
 
