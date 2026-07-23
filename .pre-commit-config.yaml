@@ -1,9 +1,7 @@
 # Run `uv run prek auto-update` periodically to update hook versions
-exclude:
-  glob: tests/**
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.14.8
+    rev: v0.14.13
     hooks:
       - id: ruff-format
         name: ruff-format (commit)

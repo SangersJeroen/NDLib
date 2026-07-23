@@ -440,13 +440,13 @@ class DataBlock:
         new_axis_points = []
         for group in np.unique(groups):
             if group == len(bin_centers):
-                continue # Values are to the right of final bin_edge
+                continue  # Values are to the right of final bin_edge
             if group == 0:
-                continue # Values are to the left of first bin_edge
+                continue  # Values are to the left of first bin_edge
             mask = groups == group
             view = da.take(self.data, indices=mask, axis=relevant_axis.index_in_array)
             if len(view) > 0:
-                new_axis_points.append(bin_centers[group-1])
+                new_axis_points.append(bin_centers[group - 1])
             seq.append(reducer(view, axis=relevant_axis.index_in_array))
         new_view = da.stack(seq=seq, axis=relevant_axis.index_in_array)
 
@@ -1203,22 +1203,38 @@ class Ensemble:
         sort_axes = [axis.name for axis in self.axes] + [rebin_axis]
         sort_axes.remove(relevant_axis.name)
 
-        new_view = self.data.assign(**{
-            rebin_axis: self.data[relevant_axis.name].map_partitions(
-                pd.cut, bins=bin_edges_, include_lowest=True, labels=False
-            )
-        })
+        if isinstance(self.data, dd.DataFrame):
+            self.data: dd.DataFrame
+            new_view = self.data.assign(**{
+                rebin_axis: self.data[relevant_axis.name].map_partitions(
+                    pd.cut, bins=bin_edges_, include_lowest=True, labels=False
+                )
+            })
+        else:
+            self.data: pd.DataFrame
+            new_view = self.data.assign(**{
+                rebin_axis: pd.cut(
+                    self.data[relevant_axis.name],
+                    bins=bin_edges_,
+                    include_lowest=True,
+                    labels=False,
+                )
+            })
 
         new_view = new_view.dropna()
 
-        def _mapper_func(i):
-            if np.isnan(i):
-                return 1_000_000
-            return bin_centers[int(i)]
+        mapping: dict[int, float] = dict(enumerate(bin_centers))
+        if isinstance(new_view, dd.DataFrame):
+            new_view[relevant_axis.name]: dd.DataFrame = (
+                new_view[rebin_axis]
+                .map(mapping, meta=(relevant_axis.name, "float64"))
+                .fillna(1_000_000)
+            )
+        else:
+            new_view[relevant_axis.name]: pd.DataFrame = (
+                new_view[rebin_axis].map(mapping).fillna(1_000_000)
+            )
 
-        new_view[relevant_axis.name] = new_view[rebin_axis].apply(
-            _mapper_func, meta=(relevant_axis.name, "float64")
-        )
         new_view = new_view.drop(columns=rebin_axis)
 
         new_axes = deepcopy(self.axes)
@@ -1228,6 +1244,10 @@ class Ensemble:
             index_in_array=relevant_axis.index_in_array,
             unit=relevant_axis.unit,
             navigate=relevant_axis.is_nav,
+        )
+
+        new_axes[relevant_axis.index_in_array].scale = (
+            new_binsize if not None else bin_centers[2] - bin_centers[1]
         )
 
         return type(self)(new_view, new_axes, self.quantity, self.unit)
@@ -1345,11 +1365,16 @@ class Ensemble:
                 f"axis_name: {axis.name},\naxis_type: {type(axis)},\naxis_min: {axis.min},\naxis_scale: {axis.scale},\naxis_size: {axis.size}"
             )
 
-        values = self.data[self.quantity].to_dask_array(lengths=True).rechunk()
+        quantity_data: pd.Series | dd.Series = self.data[self.quantity]
+        if isinstance(quantity_data, dd.Series):
+            values: da.Array = quantity_data.to_dask_array(lengths=True).rechunk()
+        else:
+            values: da.Array = da.array(quantity_data)
+
         coords = da.stack(
             [
                 ((self.data[axis.name] - axis.min) / axis.scale)
-                .astype(np.uint16)
+                .astype(np.int64)
                 .to_dask_array(lengths=True)
                 for axis in self.axes
             ],
