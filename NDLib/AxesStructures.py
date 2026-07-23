@@ -64,15 +64,9 @@ class SignalAxis(Axis):
         name: str,
         index_in_array: int,
         unit: str,
-        navigate: bool,
+        navigate: bool = False,
     ):
         super().__init__(name, index_in_array, unit, navigate)
-
-        if len(axis_points) > 1:
-            first_diff = axis_points[1] - axis_points[0]
-            # assert np.allclose(
-            #     axis_points[1:] - axis_points[:-1], first_diff
-            # ), "Axis points are not monotonically increasing, try UnorderedSignalAxis"
 
         self.points: Axis1D = np.array(axis_points)
         self.ordered = True
@@ -132,10 +126,9 @@ class UnorderedSignalAxis(Axis):
         name: str,
         index_in_array: int,
         unit: str,
-        navigate: bool,
+        navigate: bool = False,
     ):
         super().__init__(name, index_in_array, unit, navigate)
-        assert len(axis_points) > 1, "Axis is of length 1 or less"
 
         self.points: Axis1D = axis_points
         self.binned: bool = False
@@ -159,7 +152,8 @@ class UnorderedSignalAxis(Axis):
         )
 
     def crop(self, min: Number | None = None, max: Number | None = None) -> None:
-        assert (min is None) & (max is None), "Both min and max are None"
+        if (min is None) & (max is None):
+            raise RuntimeError("Both min and max are None")
 
         if min is not None and min > self.min:
             self.points = self.points[self.points > min]
@@ -187,11 +181,12 @@ class CategoricalAxis(Axis):
         name: str,
         index_in_array: int,
         unit: str,
-        navigate: bool,
+        navigate: bool = False,
     ):
         super().__init__(name, index_in_array, unit, navigate)
 
-        assert len(categories) > 0, "Categories list is empty"
+        if categories == []:
+            raise RuntimeError("Empty category list")
 
         self.points: np.ndarray = np.array(categories)
         self.size: int = len(self.points)
