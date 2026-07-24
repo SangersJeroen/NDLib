@@ -134,6 +134,14 @@ class DataBlock:
                 )
         self.shape: tuple[int, ...] = tuple(axis.size for axis in self.axes)
 
+    def rename_quantity(self, new_name: str) -> Self:
+        new_self = deepcopy(self)
+        new_self.quantity = new_name
+        return new_self
+
+    def c_op(self, axis, operation) -> Self:
+        raise NotImplementedError()
+
     def reorder_axis(self, axis_name: str, target_index: int) -> None:
         """
         Allows reording of both axis and data.
@@ -345,7 +353,7 @@ class DataBlock:
                     return axis
         raise RuntimeError(f"{self} does not have axis {axis_name}")
 
-    def axis_points_by_name(self, axis_name: str) -> np.ndarray:
+    def axis_p(self, axis_name: str) -> np.ndarray:
         """Return 1D-array of points corresponding to axis with name `axis_name`
 
         Args:
@@ -1022,6 +1030,18 @@ class Ensemble:
         new_data[self.quantity] **= other
         return type(self)(new_data, self.axes, self.quantity, self.unit)
 
+    def __repr__(self) -> str:
+        return self.__str__()
+
+    def __str__(self) -> str:
+        return f"Enesmble trackin {self.quantity} across {len(self.data.columns) - 1} coordinates"
+
+    def reorder_axis(self) -> None:
+        raise NotImplementedError()
+
+    def crop_axis(self) -> None:
+        raise NotImplementedError()
+
     def has_axis(self, axis_name: str) -> bool:
         return any(axis.name == axis_name for axis in self.axes)
 
@@ -1033,7 +1053,7 @@ class Ensemble:
                 return axis
         raise RuntimeError("Should not reach here")
 
-    def axis(self, axis_name: str) -> Axis1D | None:
+    def axis_p(self, axis_name: str) -> Axis1D | None:
         if not self.has_axis(axis_name):
             raise RuntimeError(f"{self} has no axis {axis_name}")
 
@@ -1042,6 +1062,9 @@ class Ensemble:
                 return axis.points
 
         return None
+
+    def cluster(self) -> None:
+        raise NotImplementedError()
 
     def reduce_axis(
         self,
