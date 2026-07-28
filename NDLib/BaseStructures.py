@@ -125,6 +125,7 @@ class DataBlock:
 
     def __post_init_db__(self) -> None:
         self.axes.sort(key=return_axis_idx)
+        axis_indices: list[int] = [axis.index_in_array for axis in self.axes]
         axis_sizes: list[int] = [axis.size for axis in self.axes]
         data_shape: tuple[int, ...] = self.data.shape
         for dim in range(self.dims):
@@ -132,6 +133,12 @@ class DataBlock:
                 raise RuntimeError(
                     f"Mismatch along dimension {dim}\n{self.axes[dim].name} has length {axis_sizes[dim]} but data has length {data_shape[dim]} along dimension"
                 )
+            if axis_indices[dim] != dim:
+                print(
+                    f"fixed axis index, {self.axes[dim].name} at dim={dim} had index: {axis_indices[dim]}"
+                )
+                self.axes[dim].index_in_array = dim
+
         self.shape: tuple[int, ...] = tuple(axis.size for axis in self.axes)
 
     def rename_quantity(self, new_name: str) -> Self:
@@ -262,7 +269,7 @@ class DataBlock:
             data = da.from_zarr(data_path)
         else:
             zarr_array = zarr.open_array(data_path, mode="r")
-            data = da.from_array(zarr_array[:])
+            data = np.array(zarr_array[:])
 
         # Reconstruct axes
         axes = []
@@ -447,12 +454,13 @@ class DataBlock:
                 f"Method not implemented for axis CategoricalAxis {axis_name}"
             )
 
+        bin_edges: np.ndarray[tuple[int], np.dtype]
+        bin_centers: np.ndarray[tuple[int], np.dtype]
+
         if bin_edges is None:
             bin_edges, bin_centers = compute_binning(
                 relevant_axis, bin_edges, new_binsize
             )
-        bin_edges: np.ndarray[tuple[int], np.dtype]
-        bin_centers: np.ndarray[tuple[int], np.dtype]
 
         groups = np.digitize(relevant_axis.points, bins=bin_edges, right=True)
 
@@ -1002,11 +1010,12 @@ class Ensemble:
         coord_block: da.Array = (
             da
             .stack([mgrid[i].flatten() for i in range(len(axes))] + [data])
-            .rechunk({0: -1, 1: "auto"})
+            .rechunk({0: -1, 1: "auto"}, block_size_limit=1e8)
             .T
         )
         data: dd.DataFrame = dd.io.from_dask_array(
-            coord_block, columns=[axis.name for axis in axes] + [quantity]
+            coord_block,
+            columns=[axis.name for axis in axes] + [quantity],
         )
         return Ensemble(data, axes, quantity, unit)  # type: ignore
 
@@ -1126,12 +1135,12 @@ class Ensemble:
                 f"Method not implemented for axis CategoricalAxis {axis_name}"
             )
 
+        bin_edges: np.ndarray[tuple[int], np.dtype]
+        bin_centers: np.ndarray[tuple[int], np.dtype]
         if bin_edges is None:
             bin_edges, bin_centers = compute_binning(
                 relevant_axis, bin_edges, new_binsize
             )
-        bin_edges: np.ndarray[tuple[int], np.dtype]
-        bin_centers: np.ndarray[tuple[int], np.dtype]
 
         rebin_axis = relevant_axis.name + "_bin"
         sort_axes = [axis.name for axis in self.axes] + [rebin_axis]
@@ -1186,12 +1195,12 @@ class Ensemble:
                 f"Method not implemented for axis CategoricalAxis {axis_name}"
             )
 
+        bin_edges: np.ndarray[tuple[int], np.dtype]
+        bin_centers: np.ndarray[tuple[int], np.dtype]
         if bin_edges is None:
             bin_edges, bin_centers = compute_binning(
                 relevant_axis, bin_edges, new_binsize
             )
-        bin_edges: np.ndarray[tuple[int], np.dtype]
-        bin_centers: np.ndarray[tuple[int], np.dtype]
 
         rebin_axis = relevant_axis.name + "_bin"
         sort_axes = [axis.name for axis in self.axes] + [rebin_axis]
@@ -1278,9 +1287,9 @@ class Ensemble:
                 f"Method not implemented for axis CategoricalAxis {axis_name}"
             )
 
-        bin_edges, bin_centers = compute_binning(relevant_axis, bin_edges, new_binsize)
         bin_edges: np.ndarray[tuple[int], np.dtype]
         bin_centers: np.ndarray[tuple[int], np.dtype]
+        bin_edges, bin_centers = compute_binning(relevant_axis, bin_edges, new_binsize)
 
         rebin_axis = relevant_axis.name + "_bin"
 
@@ -1364,7 +1373,7 @@ class Ensemble:
             lambda b: b.todense(),
             dtype=values.dtype,
         )
-        data_db = data_db.compute()
+        data_db = data_db.compute()  # TODO: does this work without?
 
         return DataBlock(data_db, deepcopy(self.axes), self.quantity, self.unit)
 
@@ -1386,20 +1395,24 @@ class Ensemble:
                 f"Can not perform operation, self.data has not column {other.quantity}"
             )
 
-        self_data: pd.DataFrame = self.data
-        other_data: pd.DataFrame = other.data
+        self_data: dd.DataFrame = self.data
+        other_data: dd.DataFrame = other.data
 
         left_axes = [ax.name for ax in self.axes]
         right_axes = [ax.name for ax in other.axes]
         common_axes = list(set(left_axes) & set(right_axes))
 
-        new_data = self_data.merge(
-            other_data, how="left", on=common_axes, suffixes=("", "_other")
-        )
-        new_data[other.quantity] = operation(
-            new_data[other.quantity], new_data[other.quantity + "_other"]
-        )
-        new_data = new_data.drop(columns=other.quantity + "_other")
+        def _function(partition, other_data, operation):
+            new_part = partition.merge(
+                other_data, how="left", on=common_axes, suffixes=("", "_other")
+            )
+            new_part[other.quantity] = operation(
+                new_part[other.quantity], new_part[other.quantity + "_other"]
+            )
+            new_part.drop(columns=other.quantity + '_other')
+            return new_part
+
+        new_data = self_data.map_partitions(_function, other_data, operation)
 
         if other.quantity in left_axes:
             old_axis: SignalAxis | UnorderedSignalAxis = self.axes[
