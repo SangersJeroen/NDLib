@@ -69,7 +69,7 @@ class SignalAxis(Axis):
         *,
         navigate: bool = False,
     ) -> None:
-        super().__init__(name, index_in_array, unit, navigate)
+        super().__init__(name, index_in_array, unit, navigate=navigate)
 
         self.points: Axis1D = np.array(axis_points)
         self.ordered = True
@@ -144,7 +144,7 @@ class UnorderedSignalAxis(Axis):
         self.__post_init__()
 
     def __post_init__(self) -> None:
-        self.size: int = len(self.points)
+        self.size: int = self.points.size
         self.min: Number = self.points.min()
         self.max: Number = self.points.max()
 
@@ -194,7 +194,7 @@ class CategoricalAxis(Axis):
         *,
         navigate: bool = False,
     ) -> None:
-        super().__init__(name, index_in_array, unit, navigate)
+        super().__init__(name, index_in_array, unit, navigate=navigate)
 
         if categories == []:
             raise RuntimeError("Empty category list")

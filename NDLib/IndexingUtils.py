@@ -4,13 +4,13 @@ Utilities for parsing indexing expressions in DataBlock and Ensemble.
 """
 
 import re
-from typing import Literal
+from typing import Literal, TypeAlias
 
 import numpy as np
 
 from .Types import Axis1D
 
-type OperatorStr = Literal["<"] | Literal["<="] | Literal[">"] | Literal[">="]
+OperatorStr: TypeAlias = Literal["<"] | Literal["<="] | Literal[">"] | Literal[">="]
 
 COMPOUND_PATTERN = (
     # Pattern for compound inequalities: -3<=x<3 or 1<x<=5
