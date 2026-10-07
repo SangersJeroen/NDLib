@@ -32,8 +32,8 @@ class TestDataBlockSerialization:
         """Create a simple DataBlock for testing"""
         data = da.from_array(np.random.rand(10, 20), chunks=(5, 10))
         axes = [
-            SignalAxis(np.arange(10), "x", 0, "nm", True),
-            SignalAxis(np.arange(20), "y", 1, "nm", True),
+            SignalAxis(np.arange(10), "x", 0, "nm", navigate=True),
+            SignalAxis(np.arange(20), "y", 1, "nm", navigate=True),
         ]
         return DataBlock(data, axes, quantity="intensity", unit="counts")
 
@@ -42,15 +42,15 @@ class TestDataBlockSerialization:
         """Create a more complex DataBlock with different axis types"""
         data = da.from_array(np.random.rand(5, 10, 15), chunks=(5, 5, 10))
         axes = [
-            SignalAxis(np.linspace(0, 4, 5), "x", 0, "um", True),
+            SignalAxis(np.linspace(0, 4, 5), "x", 0, "um", navigate=True),
             UnorderedSignalAxis(
                 np.array([1.5, 2.3, 3.1, 4.5, 5.0, 6.2, 7.1, 8.4, 9.0, 10.5]),
                 "y",
                 1,
                 "nm",
-                False,
+                navigate=False,
             ),
-            SignalAxis(np.arange(15) * 0.5, "energy", 2, "eV", False),
+            SignalAxis(np.arange(15) * 0.5, "energy", 2, "eV", navigate=False),
         ]
         return DataBlock(data, axes, quantity="signal", unit="au")
 
@@ -59,8 +59,8 @@ class TestDataBlockSerialization:
         """Create a DataBlock with categorical axis"""
         data = da.from_array(np.random.rand(3, 10), chunks=(3, 5))
         axes = [
-            CategoricalAxis(["alpha", "beta", "gamma"], "category", 0, "-", False),
-            SignalAxis(np.arange(10), "x", 1, "nm", True),
+            CategoricalAxis(["alpha", "beta", "gamma"], "category", 0, "-", navigate=False),
+            SignalAxis(np.arange(10), "x", 1, "nm", navigate=True),
         ]
         return DataBlock(data, axes, quantity="value", unit="V")
 
@@ -86,7 +86,7 @@ class TestDataBlockSerialization:
         filepath = temp_dir / "test_simple.zarr"
         simple_datablock.save(filepath)
 
-        loaded_db = DataBlock.load(filepath, lazy=True)
+        loaded_db = DataBlock.load(filepath)
 
         assert loaded_db.quantity == simple_datablock.quantity
         assert loaded_db.unit == simple_datablock.unit
@@ -102,20 +102,17 @@ class TestDataBlockSerialization:
             loaded_db.data.compute(), simple_datablock.data.compute()
         )
 
-    def test_load_simple_datablock_eager(self, simple_datablock, temp_dir):
-        """Test loading a simple DataBlock without lazy loading"""
-        filepath = temp_dir / "test_eager.zarr"
+    def test_load_is_always_lazy(self, simple_datablock, temp_dir):
+        """Loading from disk always gives a lazy dask array, there is no eager mode"""
+        filepath = temp_dir / "test_always_lazy.zarr"
         simple_datablock.save(filepath)
 
-        loaded_db = DataBlock.load(filepath, lazy=False)
+        loaded_db = DataBlock.load(filepath)
 
-        assert loaded_db.quantity == simple_datablock.quantity
         assert isinstance(loaded_db.data, da.Array)
-
-        # Compare actual data values
-        np.testing.assert_array_almost_equal(
-            loaded_db.data.compute(), simple_datablock.data.compute()
-        )
+        assert not loaded_db._computed
+        with pytest.raises(TypeError):
+            DataBlock.load(filepath, lazy=False)
 
     def test_axes_preserved(self, simple_datablock, temp_dir):
         """Test that axes are correctly preserved through save/load"""
@@ -172,9 +169,9 @@ class TestDataBlockSerialization:
         # Create a larger DataBlock
         data = da.random.random((100, 200, 50), chunks=(20, 40, 25))
         axes = [
-            SignalAxis(np.arange(100), "x", 0, "nm", True),
-            SignalAxis(np.arange(200), "y", 1, "nm", True),
-            SignalAxis(np.arange(50), "z", 2, "nm", True),
+            SignalAxis(np.arange(100), "x", 0, "nm", navigate=True),
+            SignalAxis(np.arange(200), "y", 1, "nm", navigate=True),
+            SignalAxis(np.arange(50), "z", 2, "nm", navigate=True),
         ]
         db = DataBlock(data, axes, quantity="data", unit="a.u.")
 
@@ -182,7 +179,7 @@ class TestDataBlockSerialization:
         db.save(filepath)
 
         # Load lazily
-        loaded_db = DataBlock.load(filepath, lazy=True)
+        loaded_db = DataBlock.load(filepath)
 
         # Should be a dask array
         assert isinstance(loaded_db.data, da.Array)
@@ -200,8 +197,8 @@ class TestDataBlockSerialization:
         # Create different datablock
         new_data = da.from_array(np.ones((10, 20)), chunks=(5, 10))
         new_axes = [
-            SignalAxis(np.arange(10), "x", 0, "nm", True),
-            SignalAxis(np.arange(20), "y", 1, "nm", True),
+            SignalAxis(np.arange(10), "x", 0, "nm", navigate=True),
+            SignalAxis(np.arange(20), "y", 1, "nm", navigate=True),
         ]
         new_db = DataBlock(new_data, new_axes, quantity="new", unit="new_unit")
 
@@ -253,8 +250,8 @@ class TestEnsembleSerialization:
         ddf = dd.from_pandas(df, npartitions=2)
 
         axes = [
-            SignalAxis(np.unique(x_vals), "x", 0, "nm", True),
-            SignalAxis(np.unique(y_vals), "y", 1, "nm", True),
+            SignalAxis(np.unique(x_vals), "x", 0, "nm", navigate=True),
+            SignalAxis(np.unique(y_vals), "y", 1, "nm", navigate=True),
         ]
 
         return Ensemble(ddf, axes, quantity="intensity", unit="counts")
@@ -278,8 +275,8 @@ class TestEnsembleSerialization:
         ddf = dd.from_pandas(df, npartitions=4)
 
         axes = [
-            UnorderedSignalAxis(x_vals, "x", 0, "um", True),
-            UnorderedSignalAxis(y_vals, "y", 1, "um", False),
+            UnorderedSignalAxis(x_vals, "x", 0, "um", navigate=True),
+            UnorderedSignalAxis(y_vals, "y", 1, "um", navigate=False),
         ]
 
         return Ensemble(ddf, axes, quantity="signal", unit="a.u.")
@@ -306,7 +303,7 @@ class TestEnsembleSerialization:
         filepath = temp_dir / "test_simple.zarr"
         simple_ensemble.save(filepath)
 
-        loaded_ens = Ensemble.load(filepath, lazy=True)
+        loaded_ens = Ensemble.load(filepath)
 
         assert loaded_ens.quantity == simple_ensemble.quantity
         assert loaded_ens.unit == simple_ensemble.unit
@@ -325,24 +322,16 @@ class TestEnsembleSerialization:
             .reset_index(drop=True),
         )
 
-    def test_load_simple_ensemble_eager(self, simple_ensemble, temp_dir):
-        """Test loading a simple Ensemble without lazy loading"""
-        filepath = temp_dir / "test_eager.zarr"
+    def test_load_is_always_lazy(self, simple_ensemble, temp_dir):
+        """Loading from disk always gives a lazy dask dataframe, there is no eager mode"""
+        filepath = temp_dir / "test_always_lazy.zarr"
         simple_ensemble.save(filepath)
 
-        loaded_ens = Ensemble.load(filepath, lazy=False)
+        loaded_ens = Ensemble.load(filepath)
 
-        assert loaded_ens.quantity == simple_ensemble.quantity
         assert isinstance(loaded_ens.data, dd.DataFrame)
-
-        # Compare actual data values
-        pd.testing.assert_frame_equal(
-            loaded_ens.data.compute().sort_values(by=["x", "y"]).reset_index(drop=True),
-            simple_ensemble.data
-            .compute()
-            .sort_values(by=["x", "y"])
-            .reset_index(drop=True),
-        )
+        with pytest.raises(TypeError):
+            Ensemble.load(filepath, lazy=False)
 
     def test_axes_preserved(self, simple_ensemble, temp_dir):
         """Test that axes are correctly preserved through save/load"""
@@ -403,8 +392,8 @@ class TestEnsembleSerialization:
         ddf = dd.from_pandas(df, npartitions=10)
 
         axes = [
-            UnorderedSignalAxis(x_vals, "x", 0, "nm", True),
-            UnorderedSignalAxis(y_vals, "y", 1, "nm", False),
+            UnorderedSignalAxis(x_vals, "x", 0, "nm", navigate=True),
+            UnorderedSignalAxis(y_vals, "y", 1, "nm", navigate=False),
         ]
 
         ens = Ensemble(ddf, axes, quantity="data", unit="a.u.")
@@ -413,7 +402,7 @@ class TestEnsembleSerialization:
         ens.save(filepath)
 
         # Load lazily
-        loaded_ens = Ensemble.load(filepath, lazy=True)
+        loaded_ens = Ensemble.load(filepath)
 
         # Should be a dask dataframe
         assert isinstance(loaded_ens.data, dd.DataFrame)
@@ -440,8 +429,8 @@ class TestEnsembleSerialization:
         })
         ddf = dd.from_pandas(df, npartitions=1)
         axes = [
-            SignalAxis(np.array([1, 2, 3]), "a", 0, "-", True),
-            SignalAxis(np.array([4, 5, 6]), "b", 1, "-", False),
+            SignalAxis(np.array([1, 2, 3]), "a", 0, "-", navigate=True),
+            SignalAxis(np.array([4, 5, 6]), "b", 1, "-", navigate=False),
         ]
         new_ens = Ensemble(ddf, axes, quantity="new_qty", unit="new_unit")
 
@@ -478,8 +467,8 @@ class TestRoundTripConsistency:
         # Create initial DataBlock
         data = da.from_array(np.random.rand(10, 20), chunks=(5, 10))
         axes = [
-            SignalAxis(np.arange(10), "x", 0, "nm", True),
-            SignalAxis(np.arange(20), "y", 1, "nm", True),
+            SignalAxis(np.arange(10), "x", 0, "nm", navigate=True),
+            SignalAxis(np.arange(20), "y", 1, "nm", navigate=True),
         ]
         db = DataBlock(data, axes, quantity="test", unit="units")
 
@@ -487,7 +476,7 @@ class TestRoundTripConsistency:
         for i in range(3):
             filepath = temp_dir / f"roundtrip_{i}.zarr"
             db.save(filepath)
-            db = DataBlock.load(filepath, lazy=True)
+            db = DataBlock.load(filepath)
 
         # Verify final data matches original
         assert db.quantity == "test"
@@ -505,8 +494,8 @@ class TestRoundTripConsistency:
         })
         ddf = dd.from_pandas(df, npartitions=1)
         axes = [
-            SignalAxis(np.array([1.0, 2.0, 3.0]), "x", 0, "nm", True),
-            SignalAxis(np.array([4.0, 5.0, 6.0]), "y", 1, "nm", True),
+            SignalAxis(np.array([1.0, 2.0, 3.0]), "x", 0, "nm", navigate=True),
+            SignalAxis(np.array([4.0, 5.0, 6.0]), "y", 1, "nm", navigate=True),
         ]
         ens = Ensemble(ddf, axes, quantity="val", unit="units")
 
@@ -514,7 +503,7 @@ class TestRoundTripConsistency:
         for i in range(3):
             filepath = temp_dir / f"roundtrip_{i}.zarr"
             ens.save(filepath)
-            ens = Ensemble.load(filepath, lazy=True)
+            ens = Ensemble.load(filepath)
 
         # Verify final data matches original
         assert ens.quantity == "val"

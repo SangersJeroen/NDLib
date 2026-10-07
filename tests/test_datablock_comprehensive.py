@@ -24,8 +24,8 @@ class TestDataBlockInitialization:
         """Test basic DataBlock creation with valid inputs"""
         data = da.from_array(np.random.rand(10, 20), chunks=(5, 10))
         axes = [
-            SignalAxis(np.arange(10), "x", 0, "nm", True),
-            SignalAxis(np.arange(20), "y", 1, "nm", True),
+            SignalAxis(np.arange(10), "x", 0, "nm", navigate=True),
+            SignalAxis(np.arange(20), "y", 1, "nm", navigate=True),
         ]
         db = DataBlock(data, axes, quantity="intensity", unit="counts")
 
@@ -40,8 +40,8 @@ class TestDataBlockInitialization:
         """Test DataBlock creation with default quantity and unit"""
         data = da.from_array(np.random.rand(5, 5), chunks=(5, 5))
         axes = [
-            SignalAxis(np.arange(5), "x", 0, "nm", True),
-            SignalAxis(np.arange(5), "y", 1, "nm", True),
+            SignalAxis(np.arange(5), "x", 0, "nm", navigate=True),
+            SignalAxis(np.arange(5), "y", 1, "nm", navigate=True),
         ]
         db = DataBlock(data, axes)
 
@@ -51,7 +51,7 @@ class TestDataBlockInitialization:
     def test_mismatched_dimensions(self):
         """Test that mismatched data and axes dimensions raise error"""
         data = da.from_array(np.random.rand(10, 20), chunks=(5, 10))
-        axes = [SignalAxis(np.arange(10), "x", 0, "nm", True)]
+        axes = [SignalAxis(np.arange(10), "x", 0, "nm", navigate=True)]
 
         with pytest.raises(RuntimeError, match="Mismatched number of dimensions"):
             DataBlock(data, axes)
@@ -60,19 +60,19 @@ class TestDataBlockInitialization:
         """Test that mismatched axis sizes and data shape raise error"""
         data = da.from_array(np.random.rand(10, 20), chunks=(5, 10))
         axes = [
-            SignalAxis(np.arange(15), "x", 0, "nm", True),  # Wrong size
-            SignalAxis(np.arange(20), "y", 1, "nm", True),
+            SignalAxis(np.arange(15), "x", 0, "nm", navigate=True),  # Wrong size
+            SignalAxis(np.arange(20), "y", 1, "nm", navigate=True),
         ]
 
-        with pytest.raises(RuntimeError, match="Mismatch along dimension"):
+        with pytest.raises(RuntimeError, match="Shape along dimension"):
             DataBlock(data, axes)
 
     def test_squeeze_single_dimension(self):
         """Test that axes with size 1 are squeezed"""
         data = da.from_array(np.random.rand(1, 20), chunks=(1, 10))
         axes = [
-            SignalAxis(np.array([0]), "x", 0, "nm", True),
-            SignalAxis(np.arange(20), "y", 1, "nm", True),
+            SignalAxis(np.array([0]), "x", 0, "nm", navigate=True),
+            SignalAxis(np.arange(20), "y", 1, "nm", navigate=True),
         ]
         db = DataBlock(data, axes, quantity="intensity")
 
@@ -85,9 +85,9 @@ class TestDataBlockInitialization:
         """Test that axes are sorted by index_in_array"""
         data = da.from_array(np.random.rand(10, 20, 30), chunks=(5, 10, 15))
         axes = [
-            SignalAxis(np.arange(30), "z", 2, "nm", True),
-            SignalAxis(np.arange(10), "x", 0, "nm", True),
-            SignalAxis(np.arange(20), "y", 1, "nm", True),
+            SignalAxis(np.arange(30), "z", 2, "nm", navigate=True),
+            SignalAxis(np.arange(10), "x", 0, "nm", navigate=True),
+            SignalAxis(np.arange(20), "y", 1, "nm", navigate=True),
         ]
         db = DataBlock(data, axes)
 
@@ -103,8 +103,8 @@ class TestDataBlockCompute:
         """Test computing a lazy dask array"""
         data = da.from_array(np.random.rand(10, 20), chunks=(5, 10))
         axes = [
-            SignalAxis(np.arange(10), "x", 0, "nm", True),
-            SignalAxis(np.arange(20), "y", 1, "nm", True),
+            SignalAxis(np.arange(10), "x", 0, "nm", navigate=True),
+            SignalAxis(np.arange(20), "y", 1, "nm", navigate=True),
         ]
         db = DataBlock(data, axes)
 
@@ -119,8 +119,8 @@ class TestDataBlockCompute:
         """Test that computing already computed data returns cached result"""
         data = da.from_array(np.random.rand(10, 20), chunks=(5, 10))
         axes = [
-            SignalAxis(np.arange(10), "x", 0, "nm", True),
-            SignalAxis(np.arange(20), "y", 1, "nm", True),
+            SignalAxis(np.arange(10), "x", 0, "nm", navigate=True),
+            SignalAxis(np.arange(20), "y", 1, "nm", navigate=True),
         ]
         db = DataBlock(data, axes)
 
@@ -137,8 +137,8 @@ class TestDataBlockAxisMethods:
         """Test has_axis returns True for existing axis"""
         data = da.from_array(np.random.rand(10, 20), chunks=(5, 10))
         axes = [
-            SignalAxis(np.arange(10), "x", 0, "nm", True),
-            SignalAxis(np.arange(20), "energy", 1, "eV", True),
+            SignalAxis(np.arange(10), "x", 0, "nm", navigate=True),
+            SignalAxis(np.arange(20), "energy", 1, "eV", navigate=True),
         ]
         db = DataBlock(data, axes)
 
@@ -149,8 +149,8 @@ class TestDataBlockAxisMethods:
         """Test has_axis returns False for non-existing axis"""
         data = da.from_array(np.random.rand(10, 20), chunks=(5, 10))
         axes = [
-            SignalAxis(np.arange(10), "x", 0, "nm", True),
-            SignalAxis(np.arange(20), "y", 1, "nm", True),
+            SignalAxis(np.arange(10), "x", 0, "nm", navigate=True),
+            SignalAxis(np.arange(20), "y", 1, "nm", navigate=True),
         ]
         db = DataBlock(data, axes)
 
@@ -160,8 +160,8 @@ class TestDataBlockAxisMethods:
         """Test retrieving axis object by name"""
         data = da.from_array(np.random.rand(10, 20), chunks=(5, 10))
         axes = [
-            SignalAxis(np.arange(10), "x", 0, "nm", True),
-            SignalAxis(np.arange(20), "energy", 1, "eV", True),
+            SignalAxis(np.arange(10), "x", 0, "nm", navigate=True),
+            SignalAxis(np.arange(20), "energy", 1, "eV", navigate=True),
         ]
         db = DataBlock(data, axes)
 
@@ -174,24 +174,24 @@ class TestDataBlockAxisMethods:
         """Test that axis_obj raises error for non-existing axis"""
         data = da.from_array(np.random.rand(10, 20), chunks=(5, 10))
         axes = [
-            SignalAxis(np.arange(10), "x", 0, "nm", True),
-            SignalAxis(np.arange(20), "y", 1, "nm", True),
+            SignalAxis(np.arange(10), "x", 0, "nm", navigate=True),
+            SignalAxis(np.arange(20), "y", 1, "nm", navigate=True),
         ]
         db = DataBlock(data, axes)
 
         with pytest.raises(RuntimeError, match="does not have axis z"):
             db.axis_obj("z")
 
-    def test_axis_points_by_name(self):
-        """Test axis_points_by_name method returns axis points"""
+    def test_axis_p(self):
+        """Test axis_p method returns axis points"""
         data = da.from_array(np.random.rand(10, 20), chunks=(5, 10))
         axes = [
-            SignalAxis(np.arange(10) * 0.5, "x", 0, "nm", True),
-            SignalAxis(np.arange(20), "y", 1, "nm", True),
+            SignalAxis(np.arange(10) * 0.5, "x", 0, "nm", navigate=True),
+            SignalAxis(np.arange(20), "y", 1, "nm", navigate=True),
         ]
         db = DataBlock(data, axes)
 
-        x_points = db.axis_points_by_name("x")
+        x_points = db.axis_p("x")
         assert len(x_points) == 10
         assert np.allclose(x_points[0], 0)
         assert np.allclose(x_points[1], 0.5)
@@ -205,8 +205,8 @@ class TestDataBlockIterAxis:
         data_arr = np.arange(100).reshape(10, 10)
         data = da.from_array(data_arr, chunks=(5, 5))
         axes = [
-            SignalAxis(np.arange(10), "x", 0, "nm", True),
-            SignalAxis(np.arange(10), "y", 1, "nm", True),
+            SignalAxis(np.arange(10), "x", 0, "nm", navigate=True),
+            SignalAxis(np.arange(10), "y", 1, "nm", navigate=True),
         ]
         db = DataBlock(data, axes)
 
@@ -217,8 +217,8 @@ class TestDataBlockIterAxis:
         """Test that iterating over non-existing axis raises error"""
         data = da.from_array(np.random.rand(10, 20), chunks=(5, 10))
         axes = [
-            SignalAxis(np.arange(10), "x", 0, "nm", True),
-            SignalAxis(np.arange(20), "y", 1, "nm", True),
+            SignalAxis(np.arange(10), "x", 0, "nm", navigate=True),
+            SignalAxis(np.arange(20), "y", 1, "nm", navigate=True),
         ]
         db = DataBlock(data, axes)
 
@@ -233,8 +233,8 @@ class TestDataBlockCropAxis:
         """Test cropping axis to min/max range"""
         data = da.from_array(np.arange(100).reshape(10, 10), chunks=(5, 5))
         axes = [
-            SignalAxis(np.arange(10) * 1.0, "x", 0, "nm", True),
-            SignalAxis(np.arange(10) * 1.0, "y", 1, "nm", True),
+            SignalAxis(np.arange(10) * 1.0, "x", 0, "nm", navigate=True),
+            SignalAxis(np.arange(10) * 1.0, "y", 1, "nm", navigate=True),
         ]
         db = DataBlock(data, axes)
 
@@ -266,8 +266,8 @@ class TestDataBlockGetMethod:
         """Test get with inequality expressions"""
         data = da.from_array(np.arange(100).reshape(10, 10), chunks=(5, 5))
         axes = [
-            SignalAxis(np.arange(10), "x", 0, "nm", True),
-            SignalAxis(np.arange(10), "y", 1, "nm", True),
+            SignalAxis(np.arange(10), "x", 0, "nm", navigate=True),
+            SignalAxis(np.arange(10), "y", 1, "nm", navigate=True),
         ]
         db = DataBlock(data, axes)
 
@@ -281,9 +281,9 @@ class TestDataBlockGetMethod:
         """Test get with multiple axes"""
         data = da.from_array(np.arange(1000).reshape(10, 10, 10), chunks=(5, 5, 5))
         axes = [
-            SignalAxis(np.arange(10), "x", 0, "nm", True),
-            SignalAxis(np.arange(10), "y", 1, "nm", True),
-            SignalAxis(np.arange(10), "z", 2, "nm", True),
+            SignalAxis(np.arange(10), "x", 0, "nm", navigate=True),
+            SignalAxis(np.arange(10), "y", 1, "nm", navigate=True),
+            SignalAxis(np.arange(10), "z", 2, "nm", navigate=True),
         ]
         db = DataBlock(data, axes)
 
@@ -294,8 +294,8 @@ class TestDataBlockGetMethod:
         """Test get with boolean mask"""
         data = da.from_array(np.arange(100).reshape(10, 10), chunks=(5, 5))
         axes = [
-            SignalAxis(np.arange(10), "x", 0, "nm", True),
-            SignalAxis(np.arange(10), "y", 1, "nm", True),
+            SignalAxis(np.arange(10), "x", 0, "nm", navigate=True),
+            SignalAxis(np.arange(10), "y", 1, "nm", navigate=True),
         ]
         db = DataBlock(data, axes)
 
@@ -318,8 +318,8 @@ class TestDataBlockGetMethod:
         """Test get with empty dict returns original"""
         data = da.from_array(np.arange(100).reshape(10, 10), chunks=(5, 5))
         axes = [
-            SignalAxis(np.arange(10), "x", 0, "nm", True),
-            SignalAxis(np.arange(10), "y", 1, "nm", True),
+            SignalAxis(np.arange(10), "x", 0, "nm", navigate=True),
+            SignalAxis(np.arange(10), "y", 1, "nm", navigate=True),
         ]
         db = DataBlock(data, axes)
 
@@ -330,8 +330,8 @@ class TestDataBlockGetMethod:
         """Test get with non-existent axis raises error"""
         data = da.from_array(np.arange(100).reshape(10, 10), chunks=(5, 5))
         axes = [
-            SignalAxis(np.arange(10), "x", 0, "nm", True),
-            SignalAxis(np.arange(10), "y", 1, "nm", True),
+            SignalAxis(np.arange(10), "x", 0, "nm", navigate=True),
+            SignalAxis(np.arange(10), "y", 1, "nm", navigate=True),
         ]
         db = DataBlock(data, axes)
 
@@ -342,8 +342,8 @@ class TestDataBlockGetMethod:
         """Test get with categorical axis"""
         data = da.from_array(np.arange(30).reshape(3, 10), chunks=(3, 5))
         axes = [
-            CategoricalAxis(["low", "medium", "high"], "level", 0, "-", True),
-            SignalAxis(np.arange(10), "x", 1, "nm", True),
+            CategoricalAxis(["low", "medium", "high"], "level", 0, "-", navigate=True),
+            SignalAxis(np.arange(10), "x", 1, "nm", navigate=True),
         ]
         db = DataBlock(data, axes)
 
@@ -359,8 +359,8 @@ class TestDataBlockValueGet:
         """Test value_get returns tuple of data and axes dict"""
         data = da.from_array(np.arange(100).reshape(10, 10), chunks=(5, 5))
         axes = [
-            SignalAxis(np.arange(10), "x", 0, "nm", True),
-            SignalAxis(np.arange(10), "y", 1, "nm", True),
+            SignalAxis(np.arange(10), "x", 0, "nm", navigate=True),
+            SignalAxis(np.arange(10), "y", 1, "nm", navigate=True),
         ]
         db = DataBlock(data, axes)
 
@@ -375,8 +375,8 @@ class TestDataBlockValueGet:
         """Test value_get with empty dict"""
         data = da.from_array(np.arange(100).reshape(10, 10), chunks=(5, 5))
         axes = [
-            SignalAxis(np.arange(10), "x", 0, "nm", True),
-            SignalAxis(np.arange(10), "y", 1, "nm", True),
+            SignalAxis(np.arange(10), "x", 0, "nm", navigate=True),
+            SignalAxis(np.arange(10), "y", 1, "nm", navigate=True),
         ]
         db = DataBlock(data, axes)
 
@@ -392,8 +392,8 @@ class TestDataBlockArithmetic:
         """Test adding scalar to DataBlock"""
         data = da.from_array(np.ones((10, 20)), chunks=(5, 10))
         axes = [
-            SignalAxis(np.arange(10), "x", 0, "nm", True),
-            SignalAxis(np.arange(20), "y", 1, "nm", True),
+            SignalAxis(np.arange(10), "x", 0, "nm", navigate=True),
+            SignalAxis(np.arange(20), "y", 1, "nm", navigate=True),
         ]
         db = DataBlock(data, axes)
 
@@ -406,8 +406,8 @@ class TestDataBlockArithmetic:
         """Test multiplying DataBlock by scalar"""
         data = da.from_array(np.ones((10, 20)) * 2, chunks=(5, 10))
         axes = [
-            SignalAxis(np.arange(10), "x", 0, "nm", True),
-            SignalAxis(np.arange(20), "y", 1, "nm", True),
+            SignalAxis(np.arange(10), "x", 0, "nm", navigate=True),
+            SignalAxis(np.arange(20), "y", 1, "nm", navigate=True),
         ]
         db = DataBlock(data, axes)
 
@@ -420,8 +420,8 @@ class TestDataBlockArithmetic:
         """Test subtracting scalar from DataBlock"""
         data = da.from_array(np.ones((10, 20)) * 5, chunks=(5, 10))
         axes = [
-            SignalAxis(np.arange(10), "x", 0, "nm", True),
-            SignalAxis(np.arange(20), "y", 1, "nm", True),
+            SignalAxis(np.arange(10), "x", 0, "nm", navigate=True),
+            SignalAxis(np.arange(20), "y", 1, "nm", navigate=True),
         ]
         db = DataBlock(data, axes)
 
@@ -434,8 +434,8 @@ class TestDataBlockArithmetic:
         """Test power operation"""
         data = da.from_array(np.ones((10, 20)) * 2, chunks=(5, 10))
         axes = [
-            SignalAxis(np.arange(10), "x", 0, "nm", True),
-            SignalAxis(np.arange(20), "y", 1, "nm", True),
+            SignalAxis(np.arange(10), "x", 0, "nm", navigate=True),
+            SignalAxis(np.arange(20), "y", 1, "nm", navigate=True),
         ]
         db = DataBlock(data, axes)
 
@@ -452,8 +452,8 @@ class TestDataBlockRebinAndReduce:
         """Test rebinning and reducing an axis"""
         data = da.from_array(np.arange(100).reshape(10, 10), chunks=(5, 5))
         axes = [
-            SignalAxis(np.arange(10) * 1.0, "x", 0, "nm", True),
-            SignalAxis(np.arange(10) * 1.0, "y", 1, "nm", True),
+            SignalAxis(np.arange(10) * 1.0, "x", 0, "nm", navigate=True),
+            SignalAxis(np.arange(10) * 1.0, "y", 1, "nm", navigate=True),
         ]
         db = DataBlock(data, axes)
 
@@ -466,8 +466,8 @@ class TestDataBlockRebinAndReduce:
         """Test fully reducing an axis"""
         data = da.from_array(np.arange(100).reshape(10, 10), chunks=(5, 5))
         axes = [
-            SignalAxis(np.arange(10), "x", 0, "nm", True),
-            SignalAxis(np.arange(10), "y", 1, "nm", True),
+            SignalAxis(np.arange(10), "x", 0, "nm", navigate=True),
+            SignalAxis(np.arange(10), "y", 1, "nm", navigate=True),
         ]
         db = DataBlock(data, axes)
 
@@ -486,8 +486,8 @@ class TestDataBlockSplitOperations:
         """Test splitting DataBlock on an axis"""
         data = da.from_array(np.arange(100).reshape(10, 10), chunks=(5, 5))
         axes = [
-            SignalAxis(np.arange(10) * 1.0, "x", 0, "nm", True),
-            SignalAxis(np.arange(10) * 1.0, "y", 1, "nm", True),
+            SignalAxis(np.arange(10) * 1.0, "x", 0, "nm", navigate=True),
+            SignalAxis(np.arange(10) * 1.0, "y", 1, "nm", navigate=True),
         ]
         db = DataBlock(data, axes)
 
@@ -515,9 +515,9 @@ class TestDataBlockWithDifferentAxisTypes:
         data = da.from_array(np.random.rand(10, 20), chunks=(5, 10))
         axes = [
             UnorderedSignalAxis(
-                np.array([1, 5, 2, 8, 3, 9, 4, 7, 6, 0]), "x", 0, "nm", True
+                np.array([1, 5, 2, 8, 3, 9, 4, 7, 6, 0]), "x", 0, "nm", navigate=True
             ),
-            SignalAxis(np.arange(20), "y", 1, "nm", True),
+            SignalAxis(np.arange(20), "y", 1, "nm", navigate=True),
         ]
         db = DataBlock(data, axes)
 
@@ -529,8 +529,8 @@ class TestDataBlockWithDifferentAxisTypes:
         """Test DataBlock with CategoricalAxis"""
         data = da.from_array(np.random.rand(3, 20), chunks=(3, 10))
         axes = [
-            CategoricalAxis(["low", "medium", "high"], "level", 0, "-", True),
-            SignalAxis(np.arange(20), "y", 1, "nm", True),
+            CategoricalAxis(["low", "medium", "high"], "level", 0, "-", navigate=True),
+            SignalAxis(np.arange(20), "y", 1, "nm", navigate=True),
         ]
         db = DataBlock(data, axes)
 
@@ -545,7 +545,7 @@ class TestDataBlockEdgeCases:
     def test_1d_datablock(self):
         """Test 1D DataBlock"""
         data = da.from_array(np.arange(100), chunks=50)
-        axes = [SignalAxis(np.arange(100), "x", 0, "nm", True)]
+        axes = [SignalAxis(np.arange(100), "x", 0, "nm", navigate=True)]
         db = DataBlock(data, axes)
 
         assert db.dims == 1
@@ -555,10 +555,10 @@ class TestDataBlockEdgeCases:
         """Test high-dimensional DataBlock (4D)"""
         data = da.from_array(np.random.rand(5, 6, 7, 8), chunks=(5, 3, 7, 4))
         axes = [
-            SignalAxis(np.arange(5), "x", 0, "nm", True),
-            SignalAxis(np.arange(6), "y", 1, "nm", True),
-            SignalAxis(np.arange(7), "z", 2, "nm", True),
-            SignalAxis(np.arange(8), "t", 3, "s", True),
+            SignalAxis(np.arange(5), "x", 0, "nm", navigate=True),
+            SignalAxis(np.arange(6), "y", 1, "nm", navigate=True),
+            SignalAxis(np.arange(7), "z", 2, "nm", navigate=True),
+            SignalAxis(np.arange(8), "t", 3, "s", navigate=True),
         ]
         db = DataBlock(data, axes)
 
@@ -569,8 +569,8 @@ class TestDataBlockEdgeCases:
         """Test quantity_data method returns data array"""
         data = da.from_array(np.random.rand(10, 20), chunks=(5, 10))
         axes = [
-            SignalAxis(np.arange(10), "x", 0, "nm", True),
-            SignalAxis(np.arange(20), "y", 1, "nm", True),
+            SignalAxis(np.arange(10), "x", 0, "nm", navigate=True),
+            SignalAxis(np.arange(20), "y", 1, "nm", navigate=True),
         ]
         db = DataBlock(data, axes)
 
@@ -583,8 +583,8 @@ class TestDataBlockEdgeCases:
         """Test __repr__ and __str__ methods"""
         data = da.from_array(np.random.rand(10, 20), chunks=(5, 10))
         axes = [
-            SignalAxis(np.arange(10), "x", 0, "nm", True),
-            SignalAxis(np.arange(20), "y", 1, "nm", True),
+            SignalAxis(np.arange(10), "x", 0, "nm", navigate=True),
+            SignalAxis(np.arange(20), "y", 1, "nm", navigate=True),
         ]
         db = DataBlock(data, axes)
 
@@ -603,8 +603,8 @@ class TestDataBlockConversions:
         """Test converting DataBlock to Ensemble"""
         data = da.from_array(np.arange(100).reshape(10, 10), chunks=(5, 5))
         axes = [
-            SignalAxis(np.arange(10) * 1.0, "x", 0, "nm", True),
-            SignalAxis(np.arange(10) * 1.0, "y", 1, "nm", True),
+            SignalAxis(np.arange(10) * 1.0, "x", 0, "nm", navigate=True),
+            SignalAxis(np.arange(10) * 1.0, "y", 1, "nm", navigate=True),
         ]
         db = DataBlock(data, axes)
 

@@ -243,12 +243,11 @@ class DataBlock:
         root.attrs["metadata"] = json.dumps(metadata)
 
     @classmethod
-    def load(cls, filepath: str | Path, lazy: bool = True) -> Self:
-        """Load DataBlock from disk with optional lazy loading.
+    def load(cls, filepath: str | Path) -> Self:
+        """Load DataBlock from disk. Data is always loaded lazily using dask.
 
         Args:
             filepath: str or Path; path to the saved DataBlock
-            lazy: bool; if True, data is loaded lazily using dask
 
         Returns:
             DataBlock; reconstructed DataBlock object
@@ -264,12 +263,7 @@ class DataBlock:
         metadata = json.loads(root.attrs["metadata"])
 
         # Load data
-        data_path = str(filepath / "data")
-        if lazy:
-            data = da.from_zarr(data_path)
-        else:
-            zarr_array = zarr.open_array(data_path, mode="r")
-            data = np.array(zarr_array[:])
+        data = da.from_zarr(str(filepath / "data"))
 
         # Reconstruct axes
         axes = []
@@ -926,12 +920,11 @@ class Ensemble:
         root.attrs["metadata"] = json.dumps(metadata)
 
     @classmethod
-    def load(cls, filepath: str | Path, *, lazy: bool = True) -> Self:
-        """Load Ensemble from disk with optional lazy loading.
+    def load(cls, filepath: str | Path) -> Self:
+        """Load Ensemble from disk. Data is always loaded lazily using dask.
 
         Args:
             filepath: str or Path; path to the saved Ensemble
-            lazy: bool; if True, data is loaded lazily using dask
 
         Returns:
             Ensemble; reconstructed Ensemble object
@@ -948,12 +941,7 @@ class Ensemble:
 
         # Load dataframe
         parquet_path = filepath / "dataframe.parquet"
-        if lazy:
-            data = dd.read_parquet(str(parquet_path), engine="pyarrow")
-        else:
-            data = dd.from_pandas(
-                pd.read_parquet(str(parquet_path), engine="pyarrow"), npartitions=1
-            )
+        data = dd.read_parquet(str(parquet_path), engine="pyarrow")
 
         # Reconstruct axes
         axes = []
