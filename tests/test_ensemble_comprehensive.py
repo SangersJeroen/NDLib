@@ -34,10 +34,10 @@ class TestEnsembleInitialization:
 
         axes = [
             UnorderedSignalAxis(
-                np.array([1.0, 2.0, 3.0, 4.0, 5.0]), "x", 0, "nm", True
+                np.array([1.0, 2.0, 3.0, 4.0, 5.0]), "x", 0, "nm", navigate=True
             ),
             UnorderedSignalAxis(
-                np.array([10.0, 20.0, 30.0, 40.0, 50.0]), "y", 1, "nm", True
+                np.array([10.0, 20.0, 30.0, 40.0, 50.0]), "y", 1, "nm", navigate=True
             ),
         ]
 
@@ -54,7 +54,7 @@ class TestEnsembleInitialization:
         df = pd.DataFrame({"x": [1.0, 2.0, 3.0], "q": [100, 200, 300]})
         ddf = dd.from_pandas(df, npartitions=1)
 
-        axes = [UnorderedSignalAxis(np.array([1.0, 2.0, 3.0]), "x", 0, "nm", True)]
+        axes = [UnorderedSignalAxis(np.array([1.0, 2.0, 3.0]), "x", 0, "nm", navigate=True)]
 
         ensemble = Ensemble(ddf, axes)
 
@@ -65,7 +65,7 @@ class TestEnsembleInitialization:
         """Test Ensemble creation with already computed pandas DataFrame"""
         df = pd.DataFrame({"x": [1.0, 2.0, 3.0], "intensity": [100, 200, 300]})
 
-        axes = [UnorderedSignalAxis(np.array([1.0, 2.0, 3.0]), "x", 0, "nm", True)]
+        axes = [UnorderedSignalAxis(np.array([1.0, 2.0, 3.0]), "x", 0, "nm", navigate=True)]
 
         ensemble = Ensemble(df, axes, quantity="intensity")
 
@@ -85,8 +85,8 @@ class TestEnsembleCompute:
         ddf = dd.from_pandas(df, npartitions=2)
 
         axes = [
-            UnorderedSignalAxis(np.array([1.0, 2.0, 3.0]), "x", 0, "nm", True),
-            UnorderedSignalAxis(np.array([10.0, 20.0, 30.0]), "y", 1, "nm", True),
+            UnorderedSignalAxis(np.array([1.0, 2.0, 3.0]), "x", 0, "nm", navigate=True),
+            UnorderedSignalAxis(np.array([10.0, 20.0, 30.0]), "y", 1, "nm", navigate=True),
         ]
 
         ensemble = Ensemble(ddf, axes, quantity="value")
@@ -103,7 +103,7 @@ class TestEnsembleCompute:
         df = pd.DataFrame({"x": [1.0, 2.0, 3.0], "value": [100, 200, 300]})
         ddf = dd.from_pandas(df, npartitions=1)
 
-        axes = [UnorderedSignalAxis(np.array([1.0, 2.0, 3.0]), "x", 0, "nm", True)]
+        axes = [UnorderedSignalAxis(np.array([1.0, 2.0, 3.0]), "x", 0, "nm", navigate=True)]
         ensemble = Ensemble(ddf, axes, quantity="value")
 
         result1 = ensemble.compute()
@@ -119,8 +119,8 @@ class TestEnsembleFromDataBlock:
         """Test converting 2D DataBlock to Ensemble"""
         data = da.from_array(np.arange(12).reshape(3, 4), chunks=(3, 4))
         axes = [
-            SignalAxis(np.array([0.0, 1.0, 2.0]), "x", 0, "nm", True),
-            SignalAxis(np.array([0.0, 1.0, 2.0, 3.0]), "y", 1, "nm", True),
+            SignalAxis(np.array([0.0, 1.0, 2.0]), "x", 0, "nm", navigate=True),
+            SignalAxis(np.array([0.0, 1.0, 2.0, 3.0]), "y", 1, "nm", navigate=True),
         ]
         db = DataBlock(data, axes, quantity="intensity", unit="counts")
 
@@ -139,7 +139,7 @@ class TestEnsembleFromDataBlock:
     def test_from_datablock_1d(self):
         """Test converting 1D DataBlock to Ensemble"""
         data = da.from_array(np.arange(5), chunks=5)
-        axes = [SignalAxis(np.array([0.0, 1.0, 2.0, 3.0, 4.0]), "x", 0, "nm", True)]
+        axes = [SignalAxis(np.array([0.0, 1.0, 2.0, 3.0, 4.0]), "x", 0, "nm", navigate=True)]
         db = DataBlock(data, axes, quantity="signal")
 
         ensemble = Ensemble.from_datablock(db)
@@ -163,9 +163,9 @@ class TestEnsembleAxisMethods:
         ddf = dd.from_pandas(df, npartitions=1)
 
         axes = [
-            UnorderedSignalAxis(np.array([1.0, 2.0, 3.0]), "x", 0, "nm", True),
+            UnorderedSignalAxis(np.array([1.0, 2.0, 3.0]), "x", 0, "nm", navigate=True),
             UnorderedSignalAxis(
-                np.array([100.0, 200.0, 300.0]), "energy", 1, "eV", True
+                np.array([100.0, 200.0, 300.0]), "energy", 1, "eV", navigate=True
             ),
         ]
         ensemble = Ensemble(ddf, axes, quantity="value")
@@ -178,7 +178,7 @@ class TestEnsembleAxisMethods:
         df = pd.DataFrame({"x": [1.0, 2.0, 3.0], "value": [10, 20, 30]})
         ddf = dd.from_pandas(df, npartitions=1)
 
-        axes = [UnorderedSignalAxis(np.array([1.0, 2.0, 3.0]), "x", 0, "nm", True)]
+        axes = [UnorderedSignalAxis(np.array([1.0, 2.0, 3.0]), "x", 0, "nm", navigate=True)]
         ensemble = Ensemble(ddf, axes, quantity="value")
 
         assert not ensemble.has_axis("z")
@@ -188,7 +188,7 @@ class TestEnsembleAxisMethods:
         df = pd.DataFrame({"x": [1.0, 2.0, 3.0], "value": [10, 20, 30]})
         ddf = dd.from_pandas(df, npartitions=1)
 
-        axes = [UnorderedSignalAxis(np.array([1.0, 2.0, 3.0]), "x", 0, "nm", True)]
+        axes = [UnorderedSignalAxis(np.array([1.0, 2.0, 3.0]), "x", 0, "nm", navigate=True)]
         ensemble = Ensemble(ddf, axes, quantity="value")
 
         x_axis = ensemble.axis_obj("x")
@@ -200,7 +200,7 @@ class TestEnsembleAxisMethods:
         df = pd.DataFrame({"x": [1.0, 2.0, 3.0], "value": [10, 20, 30]})
         ddf = dd.from_pandas(df, npartitions=1)
 
-        axes = [UnorderedSignalAxis(np.array([1.0, 2.0, 3.0]), "x", 0, "nm", True)]
+        axes = [UnorderedSignalAxis(np.array([1.0, 2.0, 3.0]), "x", 0, "nm", navigate=True)]
         ensemble = Ensemble(ddf, axes, quantity="value")
 
         x_points = ensemble.axis("x")
@@ -216,7 +216,7 @@ class TestEnsembleArithmetic:
         df = pd.DataFrame({"x": [1.0, 2.0, 3.0], "value": [10.0, 20.0, 30.0]})
         ddf = dd.from_pandas(df, npartitions=1)
 
-        axes = [UnorderedSignalAxis(np.array([1.0, 2.0, 3.0]), "x", 0, "nm", True)]
+        axes = [UnorderedSignalAxis(np.array([1.0, 2.0, 3.0]), "x", 0, "nm", navigate=True)]
         ensemble = Ensemble(ddf, axes, quantity="value")
 
         result = ensemble + 5
@@ -231,7 +231,7 @@ class TestEnsembleArithmetic:
         df = pd.DataFrame({"x": [1.0, 2.0, 3.0], "value": [10.0, 20.0, 30.0]})
         ddf = dd.from_pandas(df, npartitions=1)
 
-        axes = [UnorderedSignalAxis(np.array([1.0, 2.0, 3.0]), "x", 0, "nm", True)]
+        axes = [UnorderedSignalAxis(np.array([1.0, 2.0, 3.0]), "x", 0, "nm", navigate=True)]
         ensemble = Ensemble(ddf, axes, quantity="value")
 
         result = ensemble - 5
@@ -246,7 +246,7 @@ class TestEnsembleArithmetic:
         df = pd.DataFrame({"x": [1.0, 2.0, 3.0], "value": [10.0, 20.0, 30.0]})
         ddf = dd.from_pandas(df, npartitions=1)
 
-        axes = [UnorderedSignalAxis(np.array([1.0, 2.0, 3.0]), "x", 0, "nm", True)]
+        axes = [UnorderedSignalAxis(np.array([1.0, 2.0, 3.0]), "x", 0, "nm", navigate=True)]
         ensemble = Ensemble(ddf, axes, quantity="value")
 
         result = ensemble * 2
@@ -261,7 +261,7 @@ class TestEnsembleArithmetic:
         df = pd.DataFrame({"x": [1.0, 2.0, 3.0], "value": [2.0, 3.0, 4.0]})
         ddf = dd.from_pandas(df, npartitions=1)
 
-        axes = [UnorderedSignalAxis(np.array([1.0, 2.0, 3.0]), "x", 0, "nm", True)]
+        axes = [UnorderedSignalAxis(np.array([1.0, 2.0, 3.0]), "x", 0, "nm", navigate=True)]
         ensemble = Ensemble(ddf, axes, quantity="value")
 
         result = ensemble**2
@@ -286,10 +286,10 @@ class TestEnsembleGetMethod:
 
         axes = [
             UnorderedSignalAxis(
-                np.array([1.0, 2.0, 3.0, 4.0, 5.0]), "x", 0, "nm", True
+                np.array([1.0, 2.0, 3.0, 4.0, 5.0]), "x", 0, "nm", navigate=True
             ),
             UnorderedSignalAxis(
-                np.array([10.0, 20.0, 30.0, 40.0, 50.0]), "y", 1, "nm", True
+                np.array([10.0, 20.0, 30.0, 40.0, 50.0]), "y", 1, "nm", navigate=True
             ),
         ]
         ensemble = Ensemble(ddf, axes, quantity="value")
@@ -310,10 +310,10 @@ class TestEnsembleGetMethod:
 
         axes = [
             UnorderedSignalAxis(
-                np.array([1.0, 2.0, 3.0, 4.0, 5.0]), "x", 0, "nm", True
+                np.array([1.0, 2.0, 3.0, 4.0, 5.0]), "x", 0, "nm", navigate=True
             ),
             UnorderedSignalAxis(
-                np.array([10.0, 20.0, 30.0, 40.0, 50.0]), "y", 1, "nm", True
+                np.array([10.0, 20.0, 30.0, 40.0, 50.0]), "y", 1, "nm", navigate=True
             ),
         ]
         ensemble = Ensemble(ddf, axes, quantity="value")
@@ -329,7 +329,7 @@ class TestEnsembleGetMethod:
         df = pd.DataFrame({"x": [1.0, 2.0, 3.0], "value": [100, 200, 300]})
         ddf = dd.from_pandas(df, npartitions=1)
 
-        axes = [UnorderedSignalAxis(np.array([1.0, 2.0, 3.0]), "x", 0, "nm", True)]
+        axes = [UnorderedSignalAxis(np.array([1.0, 2.0, 3.0]), "x", 0, "nm", navigate=True)]
         ensemble = Ensemble(ddf, axes, quantity="value")
 
         result = ensemble.get({})
@@ -352,10 +352,10 @@ class TestEnsembleValueGet:
 
         axes = [
             UnorderedSignalAxis(
-                np.array([1.0, 2.0, 3.0, 4.0, 5.0]), "x", 0, "nm", True
+                np.array([1.0, 2.0, 3.0, 4.0, 5.0]), "x", 0, "nm", navigate=True
             ),
             UnorderedSignalAxis(
-                np.array([10.0, 20.0, 30.0, 40.0, 50.0]), "y", 1, "nm", True
+                np.array([10.0, 20.0, 30.0, 40.0, 50.0]), "y", 1, "nm", navigate=True
             ),
         ]
         ensemble = Ensemble(ddf, axes, quantity="value")
@@ -377,7 +377,7 @@ class TestEnsembleRenameQuantity:
         df = pd.DataFrame({"x": [1.0, 2.0, 3.0], "value": [100, 200, 300]})
         ddf = dd.from_pandas(df, npartitions=1)
 
-        axes = [UnorderedSignalAxis(np.array([1.0, 2.0, 3.0]), "x", 0, "nm", True)]
+        axes = [UnorderedSignalAxis(np.array([1.0, 2.0, 3.0]), "x", 0, "nm", navigate=True)]
         ensemble = Ensemble(ddf, axes, quantity="value")
 
         renamed = ensemble.rename_quantity("intensity")
@@ -396,8 +396,8 @@ class TestEnsembleCombine:
         ddf1 = dd.from_pandas(df1, npartitions=1)
         ddf2 = dd.from_pandas(df2, npartitions=1)
 
-        axes1 = [UnorderedSignalAxis(np.array([1.0, 2.0, 3.0]), "x", 0, "nm", True)]
-        axes2 = [UnorderedSignalAxis(np.array([4.0, 5.0, 6.0]), "x", 0, "nm", True)]
+        axes1 = [UnorderedSignalAxis(np.array([1.0, 2.0, 3.0]), "x", 0, "nm", navigate=True)]
+        axes2 = [UnorderedSignalAxis(np.array([4.0, 5.0, 6.0]), "x", 0, "nm", navigate=True)]
 
         ensemble1 = Ensemble(ddf1, axes1, quantity="value")
         ensemble2 = Ensemble(ddf2, axes2, quantity="value")
@@ -424,8 +424,8 @@ class TestEnsembleSplitOnAxis:
         ddf = dd.from_pandas(df, npartitions=2)
 
         axes = [
-            UnorderedSignalAxis(np.array([1.0, 2.0, 3.0]), "x", 0, "nm", True),
-            UnorderedSignalAxis(np.array([10.0, 20.0]), "y", 1, "nm", True),
+            UnorderedSignalAxis(np.array([1.0, 2.0, 3.0]), "x", 0, "nm", navigate=True),
+            UnorderedSignalAxis(np.array([10.0, 20.0]), "y", 1, "nm", navigate=True),
         ]
         ensemble = Ensemble(ddf, axes, quantity="value")
 
@@ -445,7 +445,7 @@ class TestEnsembleSplitOnAxis:
         df = pd.DataFrame({"x": [1.0, 2.0, 3.0], "value": [100, 200, 300]})
         ddf = dd.from_pandas(df, npartitions=1)
 
-        axes = [UnorderedSignalAxis(np.array([1.0, 2.0, 3.0]), "x", 0, "nm", True)]
+        axes = [UnorderedSignalAxis(np.array([1.0, 2.0, 3.0]), "x", 0, "nm", navigate=True)]
         ensemble = Ensemble(ddf, axes, quantity="value")
 
         with pytest.raises(ValueError, match="not found"):
@@ -456,7 +456,7 @@ class TestEnsembleSplitOnAxis:
         df = pd.DataFrame({"x": [1.0, 2.0, 3.0], "value": [100, 200, 300]})
         ddf = dd.from_pandas(df, npartitions=1)
 
-        axes = [UnorderedSignalAxis(np.array([1.0, 2.0, 3.0]), "x", 0, "nm", True)]
+        axes = [UnorderedSignalAxis(np.array([1.0, 2.0, 3.0]), "x", 0, "nm", navigate=True)]
         ensemble = Ensemble(ddf, axes, quantity="value")
 
         with pytest.raises(ValueError, match="must be specified"):
@@ -471,8 +471,8 @@ class TestEnsembleToDataBlock:
         # Create a simple ensemble from a datablock first
         data = da.from_array(np.arange(12).reshape(3, 4), chunks=(3, 4))
         axes = [
-            SignalAxis(np.array([0.0, 1.0, 2.0]), "x", 0, "nm", True),
-            SignalAxis(np.array([0.0, 1.0, 2.0, 3.0]), "y", 1, "nm", True),
+            SignalAxis(np.array([0.0, 1.0, 2.0]), "x", 0, "nm", navigate=True),
+            SignalAxis(np.array([0.0, 1.0, 2.0, 3.0]), "y", 1, "nm", navigate=True),
         ]
         db_original = DataBlock(data, axes, quantity="intensity")
 
@@ -502,7 +502,7 @@ class TestEnsembleEdgeCases:
         df = pd.DataFrame({"x": [1.0, 2.0], "value": [100, 200]})
         ddf = dd.from_pandas(df, npartitions=1)
 
-        axes = [UnorderedSignalAxis(np.array([1.0, 2.0]), "x", 0, "nm", True)]
+        axes = [UnorderedSignalAxis(np.array([1.0, 2.0]), "x", 0, "nm", navigate=True)]
         ensemble = Ensemble(ddf, axes, quantity="value")
 
         assert ensemble.dims == 1
@@ -520,9 +520,9 @@ class TestEnsembleEdgeCases:
         ddf = dd.from_pandas(df, npartitions=1)
 
         axes = [
-            UnorderedSignalAxis(np.array([1.0, 2.0, 3.0]), "x", 0, "nm", True),
-            UnorderedSignalAxis(np.array([10.0, 20.0, 30.0]), "y", 1, "nm", True),
-            UnorderedSignalAxis(np.array([100.0, 200.0, 300.0]), "z", 2, "nm", True),
+            UnorderedSignalAxis(np.array([1.0, 2.0, 3.0]), "x", 0, "nm", navigate=True),
+            UnorderedSignalAxis(np.array([10.0, 20.0, 30.0]), "y", 1, "nm", navigate=True),
+            UnorderedSignalAxis(np.array([100.0, 200.0, 300.0]), "z", 2, "nm", navigate=True),
         ]
         ensemble = Ensemble(ddf, axes, quantity="value")
 
@@ -542,7 +542,7 @@ class TestEnsembleRebinAxis:
         })
         ddf = dd.from_pandas(df, npartitions=2)
 
-        axes = [SignalAxis(np.arange(0, 5, 0.5), "x", 0, "nm", True)]
+        axes = [SignalAxis(np.arange(0, 5, 0.5), "x", 0, "nm", navigate=True)]
         ensemble = Ensemble(ddf, axes, quantity="value")
 
         # Rebin to larger bins
@@ -562,7 +562,7 @@ class TestEnsembleCOp:
         ddf1 = dd.from_pandas(df1, npartitions=1)
         ddf2 = dd.from_pandas(df2, npartitions=1)
 
-        axes = [UnorderedSignalAxis(np.array([1.0, 2.0, 3.0]), "x", 0, "nm", True)]
+        axes = [UnorderedSignalAxis(np.array([1.0, 2.0, 3.0]), "x", 0, "nm", navigate=True)]
 
         ensemble1 = Ensemble(ddf1, axes, quantity="value")
         ensemble2 = Ensemble(ddf2, axes, quantity="value")
