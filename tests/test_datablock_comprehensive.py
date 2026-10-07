@@ -64,7 +64,7 @@ class TestDataBlockInitialization:
             SignalAxis(np.arange(20), "y", 1, "nm", navigate=True),
         ]
 
-        with pytest.raises(RuntimeError, match="Mismatch along dimension"):
+        with pytest.raises(RuntimeError, match="Shape along dimension"):
             DataBlock(data, axes)
 
     def test_squeeze_single_dimension(self):
@@ -182,8 +182,8 @@ class TestDataBlockAxisMethods:
         with pytest.raises(RuntimeError, match="does not have axis z"):
             db.axis_obj("z")
 
-    def test_axis_points_by_name(self):
-        """Test axis_points_by_name method returns axis points"""
+    def test_axis_p(self):
+        """Test axis_p method returns axis points"""
         data = da.from_array(np.random.rand(10, 20), chunks=(5, 10))
         axes = [
             SignalAxis(np.arange(10) * 0.5, "x", 0, "nm", navigate=True),
@@ -191,7 +191,7 @@ class TestDataBlockAxisMethods:
         ]
         db = DataBlock(data, axes)
 
-        x_points = db.axis_points_by_name("x")
+        x_points = db.axis_p("x")
         assert len(x_points) == 10
         assert np.allclose(x_points[0], 0)
         assert np.allclose(x_points[1], 0.5)

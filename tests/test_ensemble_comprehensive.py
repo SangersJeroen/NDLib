@@ -195,15 +195,15 @@ class TestEnsembleAxisMethods:
         assert x_axis.name == "x"
         assert x_axis.unit == "nm"
 
-    def test_axis_method(self):
-        """Test axis method returns axis points"""
+    def test_axis_p(self):
+        """Test axis_p method returns axis points"""
         df = pd.DataFrame({"x": [1.0, 2.0, 3.0], "value": [10, 20, 30]})
         ddf = dd.from_pandas(df, npartitions=1)
 
         axes = [UnorderedSignalAxis(np.array([1.0, 2.0, 3.0]), "x", 0, "nm", navigate=True)]
         ensemble = Ensemble(ddf, axes, quantity="value")
 
-        x_points = ensemble.axis("x")
+        x_points = ensemble.axis_p("x")
         assert len(x_points) == 3
         assert np.allclose(x_points, [1.0, 2.0, 3.0])
 

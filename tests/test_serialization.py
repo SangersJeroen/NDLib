@@ -86,7 +86,7 @@ class TestDataBlockSerialization:
         filepath = temp_dir / "test_simple.zarr"
         simple_datablock.save(filepath)
 
-        loaded_db = DataBlock.load(filepath, lazy=True)
+        loaded_db = DataBlock.load(filepath)
 
         assert loaded_db.quantity == simple_datablock.quantity
         assert loaded_db.unit == simple_datablock.unit
@@ -102,20 +102,17 @@ class TestDataBlockSerialization:
             loaded_db.data.compute(), simple_datablock.data.compute()
         )
 
-    def test_load_simple_datablock_eager(self, simple_datablock, temp_dir):
-        """Test loading a simple DataBlock without lazy loading"""
-        filepath = temp_dir / "test_eager.zarr"
+    def test_load_is_always_lazy(self, simple_datablock, temp_dir):
+        """Loading from disk always gives a lazy dask array, there is no eager mode"""
+        filepath = temp_dir / "test_always_lazy.zarr"
         simple_datablock.save(filepath)
 
-        loaded_db = DataBlock.load(filepath, lazy=False)
+        loaded_db = DataBlock.load(filepath)
 
-        assert loaded_db.quantity == simple_datablock.quantity
         assert isinstance(loaded_db.data, da.Array)
-
-        # Compare actual data values
-        np.testing.assert_array_almost_equal(
-            loaded_db.data.compute(), simple_datablock.data.compute()
-        )
+        assert not loaded_db._computed
+        with pytest.raises(TypeError):
+            DataBlock.load(filepath, lazy=False)
 
     def test_axes_preserved(self, simple_datablock, temp_dir):
         """Test that axes are correctly preserved through save/load"""
@@ -182,7 +179,7 @@ class TestDataBlockSerialization:
         db.save(filepath)
 
         # Load lazily
-        loaded_db = DataBlock.load(filepath, lazy=True)
+        loaded_db = DataBlock.load(filepath)
 
         # Should be a dask array
         assert isinstance(loaded_db.data, da.Array)
@@ -306,7 +303,7 @@ class TestEnsembleSerialization:
         filepath = temp_dir / "test_simple.zarr"
         simple_ensemble.save(filepath)
 
-        loaded_ens = Ensemble.load(filepath, lazy=True)
+        loaded_ens = Ensemble.load(filepath)
 
         assert loaded_ens.quantity == simple_ensemble.quantity
         assert loaded_ens.unit == simple_ensemble.unit
@@ -325,24 +322,16 @@ class TestEnsembleSerialization:
             .reset_index(drop=True),
         )
 
-    def test_load_simple_ensemble_eager(self, simple_ensemble, temp_dir):
-        """Test loading a simple Ensemble without lazy loading"""
-        filepath = temp_dir / "test_eager.zarr"
+    def test_load_is_always_lazy(self, simple_ensemble, temp_dir):
+        """Loading from disk always gives a lazy dask dataframe, there is no eager mode"""
+        filepath = temp_dir / "test_always_lazy.zarr"
         simple_ensemble.save(filepath)
 
-        loaded_ens = Ensemble.load(filepath, lazy=False)
+        loaded_ens = Ensemble.load(filepath)
 
-        assert loaded_ens.quantity == simple_ensemble.quantity
         assert isinstance(loaded_ens.data, dd.DataFrame)
-
-        # Compare actual data values
-        pd.testing.assert_frame_equal(
-            loaded_ens.data.compute().sort_values(by=["x", "y"]).reset_index(drop=True),
-            simple_ensemble.data
-            .compute()
-            .sort_values(by=["x", "y"])
-            .reset_index(drop=True),
-        )
+        with pytest.raises(TypeError):
+            Ensemble.load(filepath, lazy=False)
 
     def test_axes_preserved(self, simple_ensemble, temp_dir):
         """Test that axes are correctly preserved through save/load"""
@@ -413,7 +402,7 @@ class TestEnsembleSerialization:
         ens.save(filepath)
 
         # Load lazily
-        loaded_ens = Ensemble.load(filepath, lazy=True)
+        loaded_ens = Ensemble.load(filepath)
 
         # Should be a dask dataframe
         assert isinstance(loaded_ens.data, dd.DataFrame)
@@ -487,7 +476,7 @@ class TestRoundTripConsistency:
         for i in range(3):
             filepath = temp_dir / f"roundtrip_{i}.zarr"
             db.save(filepath)
-            db = DataBlock.load(filepath, lazy=True)
+            db = DataBlock.load(filepath)
 
         # Verify final data matches original
         assert db.quantity == "test"
@@ -514,7 +503,7 @@ class TestRoundTripConsistency:
         for i in range(3):
             filepath = temp_dir / f"roundtrip_{i}.zarr"
             ens.save(filepath)
-            ens = Ensemble.load(filepath, lazy=True)
+            ens = Ensemble.load(filepath)
 
         # Verify final data matches original
         assert ens.quantity == "val"
