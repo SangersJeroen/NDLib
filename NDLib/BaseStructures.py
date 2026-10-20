@@ -1,28 +1,27 @@
-from collections.abc import Callable, Generator, Iterable, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from copy import deepcopy
+import importlib.util
 import json
 import logging
 import operator
 from pathlib import Path
 from typing import (
     Literal,
+    NotRequired,
     Self,
     TypeAlias,
+    TypedDict,
+    cast,
 )
 
 import dask.array as da
 import dask.dataframe as dd
+from dask.dataframe.groupby import Aggregation
 import numpy as np
 import pandas as pd
 import sparse
+from typing_extensions import override
 import zarr
-
-try:
-    import dask_ml.cluster
-
-    DASKML: bool = True
-except ImportError:
-    DASKML: bool = False
 
 from .AxesStructures import CategoricalAxis, SignalAxis, UnorderedSignalAxis
 from .IndexingUtils import (
@@ -33,6 +32,9 @@ from .IndexingUtils import (
 )
 from .Types import Axis1D, Number
 
+# dask-ml is optional, it is imported when DataBlock.cluster needs it
+DASKML: bool = importlib.util.find_spec("dask_ml") is not None
+
 AxisLike: TypeAlias = SignalAxis | UnorderedSignalAxis | CategoricalAxis
 Operand: TypeAlias = "DataBlock | Number | np.ndarray"
 TwoSeriesOperation: TypeAlias = Callable[[pd.Series, pd.Series], pd.Series]
@@ -41,7 +43,7 @@ TwoSeriesOperation: TypeAlias = Callable[[pd.Series, pd.Series], pd.Series]
 logger = logging.getLogger(__name__)
 
 
-def return_axis_idx(axis: SignalAxis | UnorderedSignalAxis) -> int:
+def return_axis_idx(axis: AxisLike) -> int:
     return axis.index_in_array
 
 
@@ -56,8 +58,7 @@ def _selector_to_mask(axis: AxisLike, selector: object) -> np.ndarray:
 
     if not isinstance(selector, list | tuple | np.ndarray | da.Array):
         raise TypeError(
-            f"Selector for axis '{axis.name}' must be an expression string or a boolean "
-            f"array, got {type(selector)}"
+            f"Selector for axis '{axis.name}' must be an expression string or a boolean array, got {type(selector)}"
         )
     mask = (
         selector.compute() if isinstance(selector, da.Array) else np.asarray(selector)
@@ -83,20 +84,80 @@ def _filtered_axis(axis: AxisLike, mask: np.ndarray) -> AxisLike:
     kept = np.asarray(axis.points)[mask]
     if len(kept) == 0 and not isinstance(axis, SignalAxis):
         raise ValueError(f"The selection on axis '{axis.name}' is empty")
-    common = {
-        "name": axis.name,
-        "index_in_array": axis.index_in_array,
-        "unit": axis.unit,
-        "navigate": axis.is_nav,
-    }
     if isinstance(axis, CategoricalAxis):
-        return CategoricalAxis(kept.tolist(), **common)
-    return type(axis)(kept, **common)
+        return CategoricalAxis(
+            kept.tolist(),
+            axis.name,
+            axis.index_in_array,
+            axis.unit,
+            navigate=axis.is_nav,
+        )
+    return type(axis)(
+        kept, axis.name, axis.index_in_array, axis.unit, navigate=axis.is_nav
+    )
+
+
+class _AxisRecord(TypedDict):
+    """An axis as stored in the JSON metadata of a saved DataBlock or Ensemble."""
+
+    type: str
+    name: str
+    index_in_array: int
+    unit: str
+    navigate: bool
+    points: NotRequired[list[float]]
+    categories: NotRequired[list[str]]
+
+
+class _Metadata(TypedDict):
+    quantity: str
+    unit: str
+    axes: list[_AxisRecord]
+
+
+def _axis_to_record(axis: AxisLike) -> _AxisRecord:
+    record = _AxisRecord(
+        type=type(axis).__name__,
+        name=axis.name,
+        index_in_array=axis.index_in_array,
+        unit=axis.unit,
+        navigate=axis.is_nav,
+    )
+    values = np.asarray(axis.points).tolist()
+    if isinstance(axis, CategoricalAxis):
+        record["categories"] = values
+    else:
+        record["points"] = values
+    return record
+
+
+def _axis_from_record(record: _AxisRecord) -> AxisLike:
+    kind = record["type"]
+    name = record["name"]
+    index = record["index_in_array"]
+    unit = record["unit"]
+    navigate = record["navigate"]
+    if kind == "CategoricalAxis":
+        categories = record.get("categories")
+        if categories is None:
+            raise ValueError(f"Saved axis '{name}' has no categories")
+        return CategoricalAxis(categories, name, index, unit, navigate=navigate)
+    if kind not in {"SignalAxis", "UnorderedSignalAxis"}:
+        raise ValueError(f"Unknown axis type: {kind}")
+    points = record.get("points")
+    if points is None:
+        raise ValueError(f"Saved axis '{name}' has no points")
+    axis_class = SignalAxis if kind == "SignalAxis" else UnorderedSignalAxis
+    return axis_class(np.array(points), name, index, unit, navigate=navigate)
+
+
+def _read_metadata(root: zarr.Group) -> _Metadata:
+    return cast("_Metadata", json.loads(str(root.attrs["metadata"])))
 
 
 def compute_binning(
     axis: SignalAxis | UnorderedSignalAxis,
-    bin_edges: Axis1D | None = None,
+    bin_edges: Axis1D | Sequence[Number] | None = None,
     bin_size: Number | None = None,
     eps: float = 1e-4,
 ) -> tuple[Axis1D, Axis1D]:
@@ -105,7 +166,7 @@ def compute_binning(
             raise RuntimeError("Both 'new_binsize' and 'bin_edges' are None")
 
         num_bins = int(np.floor((axis.max - axis.min) / bin_size))
-        bin_edges: Axis1D = np.linspace(axis.min - eps, axis.max + eps, num_bins + 1)
+        bin_edges = np.linspace(axis.min - eps, axis.max + eps, num_bins + 1)
     else:
         # Work on a float copy: the padding below must not modify the caller's edges
         bin_edges = np.array(bin_edges, dtype=float)
@@ -118,14 +179,23 @@ def compute_binning(
     return bin_edges, bin_centers
 
 
-def _normalise_drop_axes(drop_axes: list[str] | str | None) -> list[str]:
+def _moveaxis(
+    data: da.Array | np.ndarray, source: int, destination: int
+) -> da.Array | np.ndarray:
+    """`moveaxis` that keeps numpy arrays numpy and dask arrays dask."""
+    if isinstance(data, np.ndarray):
+        return np.moveaxis(data, source, destination)
+    return da.moveaxis(data, source, destination)
+
+
+def _normalise_drop_axes(drop_axes: object) -> list[str]:
     """The axis names in `drop_axes` as a list; None means no axes."""
     if drop_axes is None:
         return []
     if isinstance(drop_axes, str):
         return [drop_axes]
     if isinstance(drop_axes, list):
-        return drop_axes
+        return [str(name) for name in drop_axes]
     raise ValueError(
         f"drop_axes should be list[str], str or None.\nGot {type(drop_axes)}"
     )
@@ -168,19 +238,19 @@ class DataBlock:
     def __init__(
         self,
         data: da.Array | np.ndarray,
-        axes: Iterable[SignalAxis | CategoricalAxis],
+        axes: Iterable[AxisLike],
         quantity: str = "q",
         unit: str = "-",
     ) -> None:
-        axes_list: list = list(axes)
+        super().__init__()
+        axes_list: list[AxisLike] = list(axes)
         if not len(data.shape) == len(axes_list):
             raise RuntimeError("Mismatched number of dimensions in data and axes")
         shape = data.shape
 
-        axes: list[AxisLike] = sorted(axes, key=return_axis_idx)
+        sorted_axes = sorted(axes_list, key=return_axis_idx)
 
-        for i in range(len(axes)):
-            axis: AxisLike = axes[i]
+        for i, axis in enumerate(sorted_axes):
             if shape[i] != len(axis.points):
                 raise RuntimeError(
                     f"Shape along dimension {i} has length {shape[i]} but axis has length {len(axis.points)}"
@@ -203,7 +273,7 @@ class DataBlock:
                 axis.index_in_array = i
 
         self.data: da.Array | np.ndarray = data
-        self.axes: list[SignalAxis | CategoricalAxis] = axes_list
+        self.axes: list[AxisLike] = axes_list
         self.dims: int = len(self.data.shape)
         self.quantity: str = quantity
         self.unit: str = unit
@@ -213,9 +283,11 @@ class DataBlock:
             self._computed = True
         self.__post_init_db__()
 
+    @override
     def __repr__(self) -> str:
         return f"{self.__class__}\n"
 
+    @override
     def __str__(self) -> str:
         return self.__repr__()
 
@@ -223,7 +295,7 @@ class DataBlock:
         self.axes.sort(key=return_axis_idx)
         axis_indices: list[int] = [axis.index_in_array for axis in self.axes]
         axis_sizes: list[int] = [axis.size for axis in self.axes]
-        data_shape: tuple[int, ...] = self.data.shape
+        data_shape = self.data.shape
         for dim in range(self.dims):
             if not axis_sizes[dim] == data_shape[dim]:
                 raise RuntimeError(
@@ -245,7 +317,7 @@ class DataBlock:
         new_self.quantity = new_name
         return new_self
 
-    def c_op(self, axis: str, operation: Callable) -> Self:
+    def c_op(self, axis: str, operation: Callable[..., object]) -> Self:
         raise NotImplementedError()
 
     def _moved(
@@ -268,8 +340,7 @@ class DataBlock:
         for i, axis in enumerate(new_axes):
             axis.index_in_array = i
 
-        array_module = np if isinstance(self.data, np.ndarray) else da
-        return new_axes, array_module.moveaxis(self.data, old_index, target_index)
+        return new_axes, _moveaxis(self.data, old_index, target_index)
 
     def reorder_axis(self, axis_name: str, target_index: int) -> Self:
         """
@@ -318,10 +389,10 @@ class DataBlock:
         Returns:
             np.ndarray; computed data
         """
-        if not self._computed:
-            self.data: da.Array = self.data.compute()
-            self._computed = True
-        return self.data
+        if isinstance(self.data, da.Array):
+            self.data = np.asarray(self.data.compute())
+        self._computed = True
+        return np.asarray(self.data)
 
     def save(self, filepath: str | Path) -> None:
         """Save DataBlock to disk using Zarr format for lazy loading.
@@ -336,38 +407,16 @@ class DataBlock:
         # Save data array to zarr
         data_path = str(filepath / "data")
         if isinstance(self.data, da.Array):
-            self.data.to_zarr(data_path, overwrite=True)
+            da.to_zarr(self.data, data_path, overwrite=True)
         else:
-            zarr.save_array(data_path, self.data, overwrite=True)
+            zarr.save_array(data_path, self.data, overwrite=True)  # pyright: ignore[reportArgumentType]
 
-        # Save axes information
-        axes_data: list[AxisLike] = []
-        for axis in self.axes:
-            axis_dict = {
-                "type": type(axis).__name__,
-                "name": axis.name,
-                "index_in_array": axis.index_in_array,
-                "unit": axis.unit,
-                "navigate": axis.is_nav,
-            }
-            if isinstance(axis, (SignalAxis, UnorderedSignalAxis)):
-                axis_dict["points"] = (
-                    axis.points.tolist()
-                    if hasattr(axis.points, "tolist")
-                    else list(axis.points)
-                )
-            elif isinstance(axis, CategoricalAxis):
-                axis_dict["categories"] = axis.points.tolist()
-            axes_data.append(axis_dict)
-
-        # Save metadata as JSON
-        metadata = {
-            "quantity": self.quantity,
-            "unit": self.unit,
-            "axes": axes_data,
-        }
-
-        # Open zarr group to save metadata
+        # Save metadata as JSON in the zarr group
+        metadata = _Metadata(
+            quantity=self.quantity,
+            unit=self.unit,
+            axes=[_axis_to_record(axis) for axis in self.axes],
+        )
         root = zarr.open_group(str(filepath), mode="a")
         root.attrs["metadata"] = json.dumps(metadata)
 
@@ -389,46 +438,14 @@ class DataBlock:
         root = zarr.open_group(str(filepath), mode="r")
 
         # Load metadata
-        metadata = json.loads(root.attrs["metadata"])
+        metadata = _read_metadata(root)
 
         # Load data
         data = da.from_zarr(str(filepath / "data"))
 
-        # Reconstruct axes
-        axes = []
-        for axis_dict in metadata["axes"]:
-            axis_type = axis_dict["type"]
-            if axis_type == "SignalAxis":
-                axis = SignalAxis(
-                    axis_points=np.array(axis_dict["points"]),
-                    name=axis_dict["name"],
-                    index_in_array=axis_dict["index_in_array"],
-                    unit=axis_dict["unit"],
-                    navigate=axis_dict["navigate"],
-                )
-            elif axis_type == "UnorderedSignalAxis":
-                axis = UnorderedSignalAxis(
-                    axis_points=np.array(axis_dict["points"]),
-                    name=axis_dict["name"],
-                    index_in_array=axis_dict["index_in_array"],
-                    unit=axis_dict["unit"],
-                    navigate=axis_dict["navigate"],
-                )
-            elif axis_type == "CategoricalAxis":
-                axis = CategoricalAxis(
-                    categories=axis_dict["categories"],
-                    name=axis_dict["name"],
-                    index_in_array=axis_dict["index_in_array"],
-                    unit=axis_dict["unit"],
-                    navigate=axis_dict["navigate"],
-                )
-            else:
-                raise ValueError(f"Unknown axis type: {axis_type}")
-            axes.append(axis)
-
         return cls(
             data=data,
-            axes=axes,
+            axes=[_axis_from_record(record) for record in metadata["axes"]],
             quantity=metadata["quantity"],
             unit=metadata["unit"],
         )
@@ -438,7 +455,7 @@ class DataBlock:
         axis_name: str,
         min_idx: int | None = None,
         max_idx: int | None = None,
-    ) -> Generator:
+    ) -> Iterator[da.Array | np.ndarray]:
         """Yields the slices of the datablock along axis `axis_name`, in order.
 
         Args:
@@ -454,8 +471,8 @@ class DataBlock:
         """
         if self.has_axis(axis_name):
             axis_idx = self.axis_obj(axis_name).index_in_array
-            data = np.moveaxis(self.data, axis_idx, 0)[min_idx:max_idx]
-            for i in range(data.shape[0]):
+            data = _moveaxis(self.data, axis_idx, 0)[min_idx:max_idx]
+            for i in range(int(data.shape[0])):
                 yield data[i]
         else:
             raise RuntimeError(f"Axis {axis_name} not found in {self.axes}")
@@ -474,7 +491,7 @@ class DataBlock:
         """
         return any(axis.name == axis_name for axis in self.axes)
 
-    def axis_obj(self, axis_name: str) -> SignalAxis | CategoricalAxis:
+    def axis_obj(self, axis_name: str) -> AxisLike:
         """Returns axis corresponding to name `axis_name`
 
         Args:
@@ -512,8 +529,8 @@ class DataBlock:
 
     def _binary_op(
         self,
-        other: "DataBlock | Number | np.ndarray",
-        operation: Callable,
+        other: Operand,
+        operation: Callable[[object, object], da.Array | np.ndarray],
         *,
         reflected: bool = False,
     ) -> Self:
@@ -532,8 +549,10 @@ class DataBlock:
                 raise ValueError(
                     "Operands should have identical axes (name, size and points)"
                 )
-            other = other.data
-        left, right = (other, self.data) if reflected else (self.data, other)
+            operand: object = other.data
+        else:
+            operand = other
+        left, right = (operand, self.data) if reflected else (self.data, operand)
         return type(self)(
             operation(left, right), deepcopy(self.axes), self.quantity, self.unit
         )
@@ -572,12 +591,11 @@ class DataBlock:
         if not self.has_axis(axis_name):
             raise RuntimeError(f"Axis {axis_name} not found")
 
-        if isinstance(self.axis_obj(axis_name), CategoricalAxis):
+        relevant_axis = self.axis_obj(axis_name)
+        if isinstance(relevant_axis, CategoricalAxis):
             raise RuntimeError(
                 f"Method not implemented for axis CategoricalAxis {axis_name}"
             )
-
-        relevant_axis: SignalAxis | CategoricalAxis = self.axis_obj(axis_name)
 
         coords = relevant_axis.points
         mask = (coords >= min) & (coords <= max)
@@ -602,8 +620,8 @@ class DataBlock:
         self,
         axis_name: str,
         new_binsize: Number | None = None,
-        bin_edges: np.ndarray[tuple[int,], np.dtype] | None = None,
-        reducer: Callable = da.mean,
+        bin_edges: Axis1D | Sequence[Number] | None = None,
+        reducer: Callable[..., object] = da.mean,
     ) -> Self:
         """Rebins axis with `axis_name` such that the new spacing of the points
         of the axis are roughly `new_binsize`. The multiple datapoints in the
@@ -620,20 +638,15 @@ class DataBlock:
         """
         if not self.has_axis(axis_name):
             raise RuntimeError(f"Axis {axis_name} not found")
-        for axis in self.axes:
-            if axis.name == axis_name:
-                relevant_axis: AxisLike = axis
+        relevant_axis = self.axis_obj(axis_name)
         if isinstance(relevant_axis, CategoricalAxis):
             raise RuntimeError(
                 f"Method not implemented for axis CategoricalAxis {axis_name}"
             )
 
-        bin_edges: np.ndarray[tuple[int], np.dtype]
-        bin_centers: np.ndarray[tuple[int], np.dtype]
+        edges, bin_centers = compute_binning(relevant_axis, bin_edges, new_binsize)
 
-        bin_edges, bin_centers = compute_binning(relevant_axis, bin_edges, new_binsize)
-
-        groups = np.digitize(relevant_axis.points, bins=bin_edges, right=True)
+        groups = np.digitize(relevant_axis.points, bins=edges, right=True)
 
         seq = []
         new_axis_points = []
@@ -662,7 +675,7 @@ class DataBlock:
     def pool(
         self,
         windows: dict[str, int],
-        reducer: Callable = np.mean,
+        reducer: Callable[..., object] = np.mean,
         remainder: Literal["trim", "error", "pad"] = "trim",
     ) -> Self:
         """Pools blocks of neighbouring samples along one or more axes, for example
@@ -698,7 +711,8 @@ class DataBlock:
         new_axes = deepcopy(self.axes)
         window_mean = np.nanmean if remainder == "pad" else np.mean
         for index, window in factors.items():
-            axis = self.axes[index]
+            # categorical axes were rejected in _pool_factors
+            axis = cast("SignalAxis | UnorderedSignalAxis", self.axes[index])
             points, pad = _pool_points(axis, window, remainder)
             if pad:
                 widths = [(0, pad) if i == index else (0, 0) for i in range(data.ndim)]
@@ -717,7 +731,7 @@ class DataBlock:
             data = data.compute()
         return type(self)(data, new_axes, self.quantity, self.unit)
 
-    def _pool_factors(self, windows: dict[str, int]) -> dict[int, int]:
+    def _pool_factors(self, windows: Mapping[str, object]) -> dict[int, int]:
         """Validated windows larger than 1, keyed by the index of their axis."""
         factors: dict[int, int] = {}
         for axis_name, window in windows.items():
@@ -741,7 +755,7 @@ class DataBlock:
     def reduce_axis(
         self,
         axis_name: str | Sequence[str],
-        reducer: Callable = lambda s: s.max(),
+        reducer: Callable[..., object] = np.max,
         out_quantity: str = "q",
         out_unit: str = "-",
     ) -> Self:
@@ -800,9 +814,11 @@ class DataBlock:
 
         return type(self)(new_data, new_axes, quantity=out_quantity, unit=out_unit)
 
-    def _select(self, indexing: dict) -> tuple[da.Array | np.ndarray, list[AxisLike]]:
+    def _select(
+        self, indexing: Mapping[str, object]
+    ) -> tuple[da.Array | np.ndarray, list[AxisLike]]:
         """Data and (new) axes after applying the selectors in `indexing`."""
-        if not isinstance(indexing, dict):
+        if not isinstance(indexing, Mapping):  # pyright: ignore[reportUnnecessaryIsInstance]
             raise TypeError(f"Expected dict, got {type(indexing)}")
 
         new_data = self.data
@@ -819,7 +835,7 @@ class DataBlock:
             new_axes[axis_obj.index_in_array] = _filtered_axis(axis_obj, mask)
         return new_data, new_axes
 
-    def get(self, indexing: dict) -> Self:
+    def get(self, indexing: Mapping[str, object]) -> Self:
         """
         Advanced indexing method using dictionary specification.
 
@@ -854,7 +870,7 @@ class DataBlock:
         return type(self)(new_data, new_axes, self.quantity, self.unit)
 
     def value_get(
-        self, indexing: dict
+        self, indexing: Mapping[str, object]
     ) -> tuple[da.Array | np.ndarray, dict[str, Axis1D]]:
         """
         Advanced indexing method that returns raw values instead of a DataBlock.
@@ -883,8 +899,9 @@ class DataBlock:
                 "dask-ml is required for clustering functionality\nPlease install via `pip install dask-ml`"
             )
 
-        clusterer = dask_ml.cluster.KMeans(n_clusters=num_clusters)
-        data_reshaped = self.data.flatten().reshape((-1, 1))
+        dask_ml_cluster = importlib.import_module("dask_ml.cluster")
+        clusterer = dask_ml_cluster.KMeans(n_clusters=num_clusters)
+        data_reshaped = da.asarray(self.data).ravel().reshape((-1, 1))
         cluster_labels = clusterer.fit(data_reshaped).predict(data_reshaped)
         cluster_data = cluster_labels.reshape(self.data.shape)
         new_axes = deepcopy(self.axes)
@@ -913,7 +930,7 @@ class DataBlock:
                 unit=split_axis.unit,
                 navigate=False,
             )
-            new_axes: list[SignalAxis | CategoricalAxis] = deepcopy(self.axes)
+            new_axes: list[AxisLike] = deepcopy(self.axes)
             new_axes[new_axis.index_in_array] = new_axis
             new_data = da.take(
                 self.data, indices=(split_coords == val), axis=new_axis.index_in_array
@@ -951,8 +968,7 @@ class DataBlock:
             ragged = [axis.name for axis in other.axes if axis.name not in drop_names]
             if ragged:
                 raise ValueError(
-                    "Every axis of `other` must be in drop_axes, otherwise the "
-                    f"selected values do not form a regular block. Keeping: {ragged}"
+                    f"Every axis of `other` must be in drop_axes, otherwise the selected values do not form a regular block. Keeping: {ragged}"
                 )
 
         missing: list[int] = [
@@ -966,7 +982,7 @@ class DataBlock:
         new_shape = tuple(axis.size for axis in new_axes)
 
         split_blocks: list[Self] = []
-        unique_values = np.sort(da.unique(other.quantity_data()).compute())
+        unique_values = np.sort(np.asarray(da.unique(other.quantity_data()).compute()))
         for uval in unique_values:
             mask = other.quantity_data() == uval
             mask = da.expand_dims(mask, axis=tuple(missing[::-1]))
@@ -1023,12 +1039,13 @@ class Ensemble:
     def __init__(
         self,
         data: dd.DataFrame | pd.DataFrame,
-        axes: list[UnorderedSignalAxis | SignalAxis | CategoricalAxis],
+        axes: list[AxisLike],
         quantity: str = "q",
         unit: str = "-",
     ) -> None:
+        super().__init__()
         self.data: dd.DataFrame | pd.DataFrame = data
-        self.axes: list[UnorderedSignalAxis | SignalAxis | CategoricalAxis] = axes
+        self.axes: list[AxisLike] = axes
         self.dims: int = len(axes)
         self.quantity: str = quantity
         self.unit: str = unit
@@ -1038,10 +1055,10 @@ class Ensemble:
             self._computed = True
 
     def compute(self) -> pd.DataFrame:
-        if not self._computed:
+        if isinstance(self.data, dd.DataFrame):
             self.data = self.data.compute()
-            self._computed = True
-        return self.data
+        self._computed = True
+        return cast("pd.DataFrame", self.data)
 
     def save(self, filepath: str | Path) -> None:
         """Save Ensemble to disk using Zarr/Parquet format for lazy loading.
@@ -1060,30 +1077,12 @@ class Ensemble:
         parquet_path = filepath / "dataframe.parquet"
         self.data.to_parquet(str(parquet_path), engine="pyarrow")
 
-        # Save axes information
-        axes_data = []
-        for axis in self.axes:
-            axis_dict = {
-                "type": type(axis).__name__,
-                "name": axis.name,
-                "index_in_array": axis.index_in_array,
-                "unit": axis.unit,
-                "navigate": axis.is_nav,
-            }
-            if isinstance(axis, (SignalAxis, UnorderedSignalAxis)):
-                axis_dict["points"] = (
-                    axis.points.tolist()
-                    if hasattr(axis.points, "tolist")
-                    else list(axis.points)
-                )
-            axes_data.append(axis_dict)
-
         # Save metadata as JSON
-        metadata = {
-            "quantity": self.quantity,
-            "unit": self.unit,
-            "axes": axes_data,
-        }
+        metadata = _Metadata(
+            quantity=self.quantity,
+            unit=self.unit,
+            axes=[_axis_to_record(axis) for axis in self.axes],
+        )
         root.attrs["metadata"] = json.dumps(metadata)
 
     @classmethod
@@ -1104,53 +1103,28 @@ class Ensemble:
         root = zarr.open_group(str(filepath), mode="r")
 
         # Load metadata
-        metadata = json.loads(root.attrs["metadata"])
+        metadata = _read_metadata(root)
 
         # Load dataframe
         parquet_path = filepath / "dataframe.parquet"
         data = dd.read_parquet(str(parquet_path), engine="pyarrow")
 
-        # Reconstruct axes
-        axes = []
-        for axis_dict in metadata["axes"]:
-            axis_type = axis_dict["type"]
-            if axis_type == "SignalAxis":
-                axis = SignalAxis(
-                    axis_points=np.array(axis_dict["points"]),
-                    name=axis_dict["name"],
-                    index_in_array=axis_dict["index_in_array"],
-                    unit=axis_dict["unit"],
-                    navigate=axis_dict["navigate"],
-                )
-            elif axis_type == "UnorderedSignalAxis":
-                axis = UnorderedSignalAxis(
-                    axis_points=np.array(axis_dict["points"]),
-                    name=axis_dict["name"],
-                    index_in_array=axis_dict["index_in_array"],
-                    unit=axis_dict["unit"],
-                    navigate=axis_dict["navigate"],
-                )
-            else:
-                raise ValueError(f"Unknown axis type: {axis_type}")
-            axes.append(axis)
-
         return cls(
             data=data,
-            axes=axes,
+            axes=[_axis_from_record(record) for record in metadata["axes"]],
             quantity=metadata["quantity"],
             unit=metadata["unit"],
         )
 
     @classmethod
     def from_datablock(cls, datablock: DataBlock) -> Self:
-        data: da.Array | np.ndarray = datablock.data.flatten()
-        axes: list[SignalAxis | CategoricalAxis] = datablock.axes
-        quantity = datablock.quantity
-        unit = datablock.unit
-        mgrid = da.meshgrid(*[axis.points for axis in axes], indexing="ij")
+        values = da.asarray(datablock.data).ravel()
+        mgrid = list(
+            da.meshgrid(*[axis.points for axis in datablock.axes], indexing="ij")
+        )
 
-        new_axes: list[SignalAxis | CategoricalAxis] = []
-        for _, axis in enumerate(datablock.axes):
+        new_axes: list[AxisLike] = []
+        for axis in datablock.axes:
             new_axis = SignalAxis(
                 axis_points=axis.points,
                 name=axis.name,
@@ -1161,42 +1135,43 @@ class Ensemble:
             if isinstance(axis, SignalAxis):
                 new_axis.scale = axis.scale
             new_axes.append(new_axis)
-        axes: list[SignalAxis | CategoricalAxis] = new_axes
         coord_block: da.Array = (
             da
-            .stack([mgrid[i].flatten() for i in range(len(axes))] + [data])
+            .stack([grid.ravel() for grid in mgrid] + [values])
             .rechunk({0: -1, 1: "auto"}, block_size_limit=1e8)
             .T
         )
-        data: dd.DataFrame = dd.io.from_dask_array(
+        data = dd.from_dask_array(
             coord_block,
-            columns=[axis.name for axis in axes] + [quantity],
+            columns=[axis.name for axis in new_axes] + [datablock.quantity],
         )
-        return Ensemble(data, axes, quantity, unit)  # type: ignore
+        return cls(data, new_axes, datablock.quantity, datablock.unit)
 
     def __sub__(self, other: Number) -> Self:
         new_data = self.data.copy()
-        new_data[self.quantity] -= other
+        new_data[self.quantity] -= cast("float", other)
         return type(self)(new_data, self.axes, self.quantity, self.unit)
 
     def __add__(self, other: Number) -> Self:
         new_data = self.data.copy()
-        new_data[self.quantity] += other
+        new_data[self.quantity] += cast("float", other)
         return type(self)(new_data, self.axes, self.quantity, self.unit)
 
     def __mul__(self, other: Number) -> Self:
         new_data = self.data.copy()
-        new_data[self.quantity] *= other
+        new_data[self.quantity] *= cast("float", other)
         return type(self)(new_data, self.axes, self.quantity, self.unit)
 
     def __pow__(self, other: Number) -> Self:
         new_data = self.data.copy()
-        new_data[self.quantity] **= other
+        new_data[self.quantity] **= cast("float", other)
         return type(self)(new_data, self.axes, self.quantity, self.unit)
 
+    @override
     def __repr__(self) -> str:
         return self.__str__()
 
+    @override
     def __str__(self) -> str:
         return f"Enesmble trackin {self.quantity} across {len(self.data.columns) - 1} coordinates"
 
@@ -1233,7 +1208,7 @@ class Ensemble:
     def reduce_axis(
         self,
         axis_name: str | Sequence[str],
-        reducer: dd.groupby.Aggregation,
+        reducer: Aggregation | str | Callable[..., object],
         out_quantity: str = "q",
         out_unit: str = "-",
     ) -> Self:
@@ -1277,12 +1252,10 @@ class Ensemble:
         if out_quantity in sort_axes:
             raise ValueError(f"out_quantity '{out_quantity}' is the name of an axis")
 
-        new_view = (
-            self.data
-            .groupby(sort_axes, observed=True)[self.quantity]
-            .agg(reducer)
-            .reset_index()
-            .rename(columns={self.quantity: out_quantity})
+        grouped = self.data.groupby(sort_axes, observed=True)[self.quantity]
+        aggregated = grouped.agg(reducer)  # pyright: ignore[reportCallIssue, reportArgumentType]
+        new_view = aggregated.reset_index().rename(
+            columns={self.quantity: out_quantity}
         )
 
         return type(self)(new_view, new_axes, quantity=out_quantity, unit=out_unit)
@@ -1291,21 +1264,19 @@ class Ensemble:
         self,
         axis_name: str,
         new_binsize: Number | None = None,
-        bin_edges: Axis1D | None = None,
-        reducer: Callable = np.mean,
+        bin_edges: Axis1D | Sequence[Number] | None = None,
+        reducer: Callable[..., object] = np.mean,
     ) -> Self:
         if not self.has_axis(axis_name):
             raise RuntimeError(f"{self} has no axis {axis_name}")
 
-        relevant_axis: AxisLike = self.axis_obj(axis_name)
+        relevant_axis = self.axis_obj(axis_name)
         if isinstance(relevant_axis, CategoricalAxis):
             raise RuntimeError(
                 f"Method not implemented for axis CategoricalAxis {axis_name}"
             )
 
-        bin_edges: np.ndarray[tuple[int], np.dtype]
-        bin_centers: np.ndarray[tuple[int], np.dtype]
-        bin_edges, bin_centers = compute_binning(relevant_axis, bin_edges, new_binsize)
+        edges, bin_centers = compute_binning(relevant_axis, bin_edges, new_binsize)
 
         rebin_axis = relevant_axis.name + "_bin"
         sort_axes = [axis.name for axis in self.axes] + [rebin_axis]
@@ -1313,7 +1284,7 @@ class Ensemble:
 
         new_view = self.data.assign(**{
             rebin_axis: self.data[relevant_axis.name].map_partitions(
-                pd.cut, bins=bin_edges, include_lowest=True, labels=False
+                pd.cut, bins=edges, include_lowest=True, labels=False
             )
         })
         new_view = new_view.dropna()
@@ -1324,13 +1295,15 @@ class Ensemble:
             .reset_index()
         )
 
+        # dask calls the reducer on the list of values of every group
+        group_reducer = cast("Callable[..., pd.Series]", reducer)
         new_view[self.quantity] = new_view[self.quantity].apply(
-            reducer, meta=(relevant_axis.name, "float64")
+            group_reducer, meta=(relevant_axis.name, "float64")
         )
 
         mapping: dict[int, float] = dict(enumerate(bin_centers))
         new_view[relevant_axis.name] = new_view[rebin_axis].map(
-            mapping, meta=(relevant_axis.name, "float64")
+            mapping.get, meta=(relevant_axis.name, "float64")
         )
         new_view = new_view.drop(columns=rebin_axis)
 
@@ -1345,7 +1318,9 @@ class Ensemble:
 
         return type(self)(new_view, new_axes, self.quantity, self.unit)
 
-    def pool(self, bin_sizes: dict[str, Number], reducer: Callable = np.mean) -> Self:
+    def pool(
+        self, bin_sizes: dict[str, Number], reducer: Callable[..., object] = np.mean
+    ) -> Self:
         """Pools several axes at once, for example `pool({"x": 3.0, "y": 3.0})`.
 
         An Ensemble has no regular sample grid, so unlike `DataBlock.pool` the sizes
@@ -1379,33 +1354,29 @@ class Ensemble:
         if not self.has_axis(axis_name):
             raise RuntimeError(f"{self} has no axis {axis_name}")
 
-        relevant_axis: AxisLike = self.axis_obj(axis_name)
+        relevant_axis = self.axis_obj(axis_name)
         if isinstance(relevant_axis, CategoricalAxis):
             raise RuntimeError(
                 f"Method not implemented for axis CategoricalAxis {axis_name}"
             )
 
-        bin_edges: np.ndarray[tuple[int], np.dtype]
-        bin_centers: np.ndarray[tuple[int], np.dtype]
-        bin_edges, bin_centers = compute_binning(relevant_axis, bin_edges, new_binsize)
+        edges, bin_centers = compute_binning(relevant_axis, bin_edges, new_binsize)
 
         rebin_axis = relevant_axis.name + "_bin"
         sort_axes = [axis.name for axis in self.axes] + [rebin_axis]
         sort_axes.remove(relevant_axis.name)
 
         if isinstance(self.data, dd.DataFrame):
-            self.data: dd.DataFrame
             new_view = self.data.assign(**{
                 rebin_axis: self.data[relevant_axis.name].map_partitions(
-                    pd.cut, bins=bin_edges, include_lowest=True, labels=False
+                    pd.cut, bins=edges, include_lowest=True, labels=False
                 )
             })
         else:
-            self.data: pd.DataFrame
             new_view = self.data.assign(**{
                 rebin_axis: pd.cut(
                     self.data[relevant_axis.name],
-                    bins=bin_edges,
+                    bins=edges.tolist(),
                     include_lowest=True,
                     labels=False,
                 )
@@ -1415,13 +1386,11 @@ class Ensemble:
 
         mapping: dict[int, float] = dict(enumerate(bin_centers))
         if isinstance(new_view, dd.DataFrame):
-            new_view[relevant_axis.name]: dd.DataFrame = new_view[rebin_axis].map(
-                mapping, meta=(relevant_axis.name, "float64")
+            new_view[relevant_axis.name] = new_view[rebin_axis].map(
+                mapping.get, meta=(relevant_axis.name, "float64")
             )
         else:
-            new_view[relevant_axis.name]: pd.DataFrame = (
-                new_view[rebin_axis].map(mapping).fillna(1_000_000)
-            )
+            new_view[relevant_axis.name] = new_view[rebin_axis].map(mapping.get)
 
         new_view = new_view.drop(columns=rebin_axis)
 
@@ -1433,7 +1402,8 @@ class Ensemble:
             unit=relevant_axis.unit,
             navigate=relevant_axis.is_nav,
         )
-        new_axes[relevant_axis.index_in_array].scale = new_binsize
+        if new_binsize is not None:
+            new_axes[relevant_axis.index_in_array].scale = new_binsize
 
         return type(self)(new_view, new_axes, self.quantity, self.unit)
 
@@ -1441,7 +1411,7 @@ class Ensemble:
         self,
         axis_name: str,
         new_binsize: Number | None = None,
-        bin_edges: Axis1D | None = None,
+        bin_edges: Axis1D | Sequence[Number] | None = None,
     ) -> Self:
         """Rebin axis to discrete values and add repetition counter axis.
 
@@ -1465,32 +1435,27 @@ class Ensemble:
         if new_binsize is None and bin_edges is None:
             raise RuntimeError("Either call with new_binsize= or bin_edges=")
 
-        for axis in self.axes:
-            if axis.name == axis_name:
-                relevant_axis: AxisLike = axis
-
+        relevant_axis = self.axis_obj(axis_name)
         if isinstance(relevant_axis, CategoricalAxis):
             raise RuntimeError(
                 f"Method not implemented for axis CategoricalAxis {axis_name}"
             )
 
-        bin_edges: np.ndarray[tuple[int], np.dtype]
-        bin_centers: np.ndarray[tuple[int], np.dtype]
-        bin_edges, bin_centers = compute_binning(relevant_axis, bin_edges, new_binsize)
+        edges, bin_centers = compute_binning(relevant_axis, bin_edges, new_binsize)
 
         rebin_axis = relevant_axis.name + "_bin"
 
         # Assign bin indices
         new_view = self.data.assign(**{
             rebin_axis: self.data[relevant_axis.name].map_partitions(
-                pd.cut, bins=bin_edges, include_lowest=True, labels=False
+                pd.cut, bins=edges, include_lowest=True, labels=False
             )
         }).dropna()
 
         mapping = dict(enumerate(bin_centers))
 
         new_view[relevant_axis.name] = new_view[rebin_axis].map(
-            mapping, meta=(relevant_axis.name, "float64")
+            mapping.get, meta=(relevant_axis.name, "float64")
         )
 
         # Create groupby keys for all axes to identify unique coordinate combinations
@@ -1535,19 +1500,20 @@ class Ensemble:
 
         quantity_data: pd.Series | dd.Series = self.data[self.quantity]
         if isinstance(quantity_data, dd.Series):
-            values: da.Array = quantity_data.to_dask_array(lengths=True).rechunk()
+            values = quantity_data.to_dask_array(lengths=True).rechunk()
         else:
-            values: da.Array = da.array(quantity_data)
+            values = da.array(quantity_data)
 
-        coords = da.stack(
-            [
-                ((self.data[axis.name] - axis.min) / axis.scale)
-                .astype(np.int64)
-                .to_dask_array(lengths=True)
-                for axis in self.axes
-            ],
-            axis=0,
-        ).rechunk((-1, values.chunksize[0]))
+        def grid_index(axis: AxisLike) -> da.Array:
+            # position of every row along the regular grid of `axis`
+            column = cast("dd.Series", self.data[axis.name])
+            steps = (column - cast("float", axis.min)) / cast("float", axis.scale)  # pyright: ignore[reportOperatorIssue]
+            return steps.astype(np.int64).to_dask_array(lengths=True)
+
+        coords = da.stack([grid_index(axis) for axis in self.axes], axis=0).rechunk((
+            -1,
+            max(values.chunks[0]),
+        ))
         nshape: tuple[int, ...] = tuple(ax.size for ax in self.axes)
 
         data_db = da.map_blocks(
@@ -1581,8 +1547,8 @@ class Ensemble:
                 f"Can not perform operation, self.data has not column {other.quantity}"
             )
 
-        self_data: dd.DataFrame = self.data
-        other_data: dd.DataFrame = other.data
+        self_data = cast("dd.DataFrame", self.data)
+        other_data = cast("dd.DataFrame", other.data)
 
         left_axes = [ax.name for ax in self.axes]
         right_axes = [ax.name for ax in other.axes]
@@ -1605,11 +1571,9 @@ class Ensemble:
         new_data = self_data.map_partitions(_function, other_data, operation)
 
         if other.quantity in left_axes:
-            old_axis: SignalAxis | UnorderedSignalAxis = self.axes[
-                left_axes.index(other.quantity)
-            ]
+            old_axis = self.axes[left_axes.index(other.quantity)]
             new_axis = UnorderedSignalAxis(
-                axis_points=new_data[other.quantity],
+                axis_points=cast("Axis1D", new_data[other.quantity]),
                 name=old_axis.name,
                 index_in_array=old_axis.index_in_array,
                 unit=old_axis.unit,
@@ -1624,8 +1588,8 @@ class Ensemble:
         return type(self)(new_data, new_axes, self.quantity, self.unit)
 
     def combine(self, other: Self) -> Self:
-        self_data: pd.DataFrame = self.data
-        other_data: pd.DataFrame = other.data
+        self_data = cast("pd.DataFrame", self.data)
+        other_data = cast("pd.DataFrame", other.data)
 
         left_axes = [ax.name for ax in self.axes]
         right_axes = [ax.name for ax in other.axes]
@@ -1636,7 +1600,7 @@ class Ensemble:
         )
         old_axes = self.axes
         new_axis = UnorderedSignalAxis(
-            axis_points=other.data[other.quantity],
+            axis_points=cast("Axis1D", other.data[other.quantity]),
             name=other.quantity,
             index_in_array=len(self.axes),
             unit=other.unit,
@@ -1644,9 +1608,9 @@ class Ensemble:
         )
         return type(self)(new_data, [*old_axes, new_axis], self.quantity, self.unit)
 
-    def _select(self, indexing: dict) -> dd.DataFrame | pd.DataFrame:
+    def _select(self, indexing: Mapping[str, object]) -> dd.DataFrame | pd.DataFrame:
         """Rows of the data that satisfy all selectors in `indexing`."""
-        if not isinstance(indexing, dict):
+        if not isinstance(indexing, Mapping):  # pyright: ignore[reportUnnecessaryIsInstance]
             raise TypeError(f"Expected dict, got {type(indexing)}")
 
         new_data = self.data
@@ -1668,7 +1632,7 @@ class Ensemble:
                 new_data = new_data[new_data[axis_name].isin(keep_values)]
         return new_data
 
-    def get(self, indexing: dict) -> Self:
+    def get(self, indexing: Mapping[str, object]) -> Self:
         """
         Advanced indexing method using dictionary specification.
 
@@ -1704,9 +1668,12 @@ class Ensemble:
         new_axes: list[AxisLike] = []
         for axis in self.axes:
             if axis.name in indexing:
-                present = new_data[axis.name].unique()
-                if hasattr(present, "compute"):
-                    present = present.compute()
+                column = new_data[axis.name]
+                present = (
+                    column.unique().compute()
+                    if isinstance(column, dd.Series)
+                    else column.unique()
+                )
                 remaining = np.isin(np.asarray(axis.points), np.asarray(present))
                 new_axes.append(_filtered_axis(axis, remaining))
             else:
@@ -1715,8 +1682,8 @@ class Ensemble:
         return type(self)(new_data, new_axes, self.quantity, self.unit)
 
     def value_get(
-        self, indexing: dict
-    ) -> tuple[np.ndarray | da.Array, dict[str, np.ndarray]]:
+        self, indexing: Mapping[str, object]
+    ) -> tuple[np.ndarray | da.Array, dict[str, np.ndarray | da.Array]]:
         """
         Advanced indexing method that returns raw values instead of an Ensemble.
         Accepts the same `indexing` as `get`; boolean masks select points of the
@@ -1739,7 +1706,9 @@ class Ensemble:
             # converts to arrays with a warning
             if column.dtype.kind not in "biufc":
                 column = column.astype(object)
-            return column.values
+            if isinstance(column, dd.Series):
+                return column.values
+            return np.asarray(column.values)
 
         axes_dict = {axis.name: values(new_data[axis.name]) for axis in self.axes}
         return values(new_data[self.quantity]), axes_dict
@@ -1759,8 +1728,8 @@ class Ensemble:
             raise ValueError(f"Axis '{axis_name}' not found in Ensemble")
 
         split_ensembles: list[Self] = []
-        split_axis: SignalAxis | UnorderedSignalAxis = self.axis_obj(axis_name)
-        split_values: np.ndarray = split_axis.points
+        split_axis = self.axis_obj(axis_name)
+        split_values = np.asarray(split_axis.points)
 
         for val in split_values:
             # Filter data to only rows with this specific axis value
@@ -1838,8 +1807,8 @@ class Ensemble:
             raise ValueError("No common axes found between self and other ensemble")
 
         # Join the two dataframes on common axes
-        self_data: dd.DataFrame = self.data
-        other_data: dd.DataFrame = other.data
+        self_data = cast("dd.DataFrame", self.data)
+        other_data = cast("dd.DataFrame", other.data)
 
         # Merge to align rows based on common axes
         merged_data = self_data.merge(

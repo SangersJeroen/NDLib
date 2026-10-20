@@ -11,7 +11,7 @@ where values with spaces or special characters are quoted (`name=='new york'`).
 
 import operator
 import re
-from typing import Literal, NamedTuple, TypeAlias
+from typing import Literal, NamedTuple, TypeAlias, cast
 
 import numpy as np
 
@@ -67,8 +67,8 @@ class _Compound(NamedTuple):
     """`value1 op1 axis op2 value2`, numbers as written in the expression"""
 
     value1: str
-    op1: str
-    op2: str
+    op1: OperatorStr
+    op2: OperatorStr
     value2: str
 
 
@@ -87,7 +87,7 @@ def _parse_inequality(axis_name: str, expr: str) -> _Simple | _Compound:
                 f"Compound expression '{expr}' for axis '{axis_name}' should use "
                 "'<' / '<=' on both sides or '>' / '>=' on both sides"
             )
-        return _Compound(val1, op1, op2, val2)
+        return _Compound(val1, cast("OperatorStr", op1), cast("OperatorStr", op2), val2)
 
     simple = re.fullmatch(rf"(?:{name})?\s*(<=|>=|==|!=|<|>)\s*({NUMBER})", text)
     if simple:

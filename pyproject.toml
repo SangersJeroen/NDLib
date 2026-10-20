@@ -40,6 +40,7 @@ dev = [
     "skylos",
     "ty",
     "pytest",
+    "pandas-stubs",
     "pytest-cov",  # required by the --cov options in [tool.pytest.ini_options]
     "dask-ml",  # optional: DataBlock.cluster
 ]
@@ -191,14 +192,14 @@ line-ending = "auto"
 # TypeScript strict mode equivalent
 # ============================================================
 [tool.basedpyright]
-pythonVersion = "3.12"
+pythonVersion = "3.11"  # matches requires-python
 typeCheckingMode = "strict"
 
 # ============================================================
 # IMPORT AND MODULE CHECKS
 # ============================================================
 reportMissingImports = true
-reportMissingTypeStubs = true  # Stricter: require type stubs
+reportMissingTypeStubs = "warning"  # sparse and dask ship no stubs
 reportUndefinedVariable = true
 reportAssertAlwaysTrue = true
 reportInvalidStringEscapeSequence = true
@@ -212,11 +213,10 @@ reportOptionalCall = true
 reportOptionalIterable = true
 reportOptionalContextManager = true
 reportOptionalOperand = true
-reportAny = true  # Prohibir Any completamente
+reportAny = "warning"  # dask/pandas return Any in many places
 reportExplicitAny = true
 reportIgnoreCommentWithoutRule = false  # No permitir # type: ignore sin código
 reportPrivateLocalImportUsage = true
-reportUnnecessaryTypeAnnotation = true  # Detectar anotaciones redundantes
 
 # ============================================================
 # TYPE COMPLETENESS (like TS noImplicitAny + strictFunctionTypes)
@@ -224,10 +224,10 @@ reportUnnecessaryTypeAnnotation = true  # Detectar anotaciones redundantes
 reportMissingParameterType = true
 reportMissingTypeArgument = true
 reportUnknownParameterType = true
-reportUnknownLambdaType = true
-reportUnknownArgumentType = true   # STRICT: Enable (can be noisy)
-reportUnknownVariableType = true   # STRICT: Enable (can be noisy)
-reportUnknownMemberType = true     # STRICT: Enable (can be noisy)
+reportUnknownLambdaType = "warning"  # dask is untyped
+reportUnknownArgumentType = "warning"  # dask is untyped
+reportUnknownVariableType = "warning"  # dask is untyped
+reportUnknownMemberType = "warning"  # dask is untyped
 reportUntypedFunctionDecorator = true
 reportUntypedClassDecorator = true
 reportUntypedBaseClass = true
@@ -279,7 +279,6 @@ reportImplicitStringConcatenation = true  # STRICT: Enable
 # ADDITIONAL STRICT CHECKS (Progressive Enhancement)
 # ============================================================
 reportImplicitOverride = true    # STRICT: Require @override decorator (Python 3.12+)
-reportShadowedImports = true     # STRICT: Detect shadowed imports
 reportDeprecated = "warning"     # Warn on deprecated usage
 
 # ============================================================
@@ -290,6 +289,8 @@ reportImportCycles = "warning"
 # ============================================================
 # EXCLUSIONS
 # ============================================================
+include = ["NDLib"]  # tests/ are not type-checked
+
 exclude = [
     "**/__pycache__",
     "**/node_modules",

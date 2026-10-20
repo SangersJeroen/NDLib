@@ -1,7 +1,8 @@
 # pyright: basic
-from typing import Literal
+from types import NotImplementedType
 
 import numpy as np
+import numpy.typing as npt
 
 from .Types import Axis1D, Number
 
@@ -43,7 +44,9 @@ class Axis:
     def __len__(self) -> int:
         return self.size
 
-    def __eq__(self, other: object, /) -> bool | np.ndarray:
+    def __eq__(
+        self, other: object, /
+    ) -> bool | npt.NDArray[np.bool_] | NotImplementedType:
         """Compares two axes by value, anything else elementwise against the points.
 
         Two axes are equal when they have the same type, name, unit and points; the
@@ -74,7 +77,10 @@ class Axis:
     def _points_array(self) -> np.ndarray:
         return np.asarray(getattr(self, "points", ()))
 
-    def _compare_points(self, value: object) -> object:  # ruff: ignore[unused-method-argument, no-self-use]
+    def _compare_points(  # ruff: ignore[no-self-use]
+        self,
+        value: object,  # ruff: ignore[unused-method-argument]
+    ) -> npt.NDArray[np.bool_] | NotImplementedType:
         """Elementwise comparison with a scalar/array; unsupported unless overridden."""
         return NotImplemented
 
@@ -128,21 +134,19 @@ class SignalAxis(Axis):
         else:
             self.scale = np.inf
 
-    def _compare_points(
-        self, value: object
-    ) -> np.ndarray[Literal[1], np.dtype[np.bool_]]:
+    def _compare_points(self, value: object) -> npt.NDArray[np.bool_]:
         return np.equal(self.points, value)
 
-    def __gt__(self, value: object, /) -> np.ndarray[Literal[1], np.dtype[np.bool_]]:
+    def __gt__(self, value: object, /) -> npt.NDArray[np.bool_]:
         return self.points > value
 
-    def __ge__(self, value: object, /) -> np.ndarray[Literal[1], np.dtype[np.bool_]]:
+    def __ge__(self, value: object, /) -> npt.NDArray[np.bool_]:
         return self.points >= value
 
-    def __le__(self, value: object, /) -> np.ndarray[Literal[1], np.dtype[np.bool_]]:
+    def __le__(self, value: object, /) -> npt.NDArray[np.bool_]:
         return self.points <= value
 
-    def __lt__(self, value: object, /) -> np.ndarray[Literal[1], np.dtype[np.bool_]]:
+    def __lt__(self, value: object, /) -> npt.NDArray[np.bool_]:
         return self.points < value
 
     def __repr__(self) -> str:
@@ -255,8 +259,6 @@ class CategoricalAxis(Axis):
             + f"Categories: {', '.join(self.points)}"
         )
 
-    def _compare_points(
-        self, value: object
-    ) -> np.ndarray[Literal[1], np.dtype[np.bool_]]:
-        points: np.ndarray[Literal[1], np.dtype[Number | np.str_]] = self.points
+    def _compare_points(self, value: object) -> npt.NDArray[np.bool_]:
+        points: np.ndarray = self.points
         return np.equal(points, value)

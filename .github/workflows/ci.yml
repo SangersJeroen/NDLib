@@ -68,3 +68,25 @@ jobs:
       # The project config has `fix = true`, so say explicitly that CI only reports
       - name: Ruff check
         run: uvx ruff@0.17.1 check . --no-fix --output-format=github
+
+  # Strict basedpyright on the library; tests are excluded in pyproject.toml. Warnings
+  # (mostly untyped dask/pandas results) are reported but do not fail the job.
+  types:
+    name: Types
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+          enable-cache: true
+          cache-dependency-glob: pyproject.toml
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: basedpyright
+        run: uv run basedpyright --level error
