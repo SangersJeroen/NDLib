@@ -40,6 +40,53 @@ def return_axis_idx(axis: SignalAxis | UnorderedSignalAxis) -> int:
     return axis.index_in_array
 
 
+def _selector_to_mask(axis: AxisLike, selector: object) -> np.ndarray:
+    """Boolean mask over the points of `axis` for an indexing `selector`: either an
+    expression string like 'x>2' or a 1-D boolean array/list/dask array with one
+    entry per point."""
+    if isinstance(selector, str):
+        if isinstance(axis, CategoricalAxis):
+            return parse_categorical_to_mask(axis.name, selector, axis.points)
+        return parse_inequality_to_mask(axis.name, selector, axis.points)
+
+    if not isinstance(selector, list | tuple | np.ndarray | da.Array):
+        raise TypeError(
+            f"Selector for axis '{axis.name}' must be an expression string or a boolean "
+            f"array, got {type(selector)}"
+        )
+    mask = selector.compute() if isinstance(selector, da.Array) else np.asarray(selector)
+    if mask.ndim != 1:
+        raise ValueError(
+            f"Mask for axis '{axis.name}' should be 1-D, got {mask.ndim} dimensions"
+        )
+    if mask.dtype != bool:
+        raise TypeError(
+            f"Mask for axis '{axis.name}' should be boolean, got dtype {mask.dtype}"
+        )
+    if len(mask) != axis.size:
+        raise ValueError(
+            f"Mask length ({len(mask)}) doesn't match axis '{axis.name}' size ({axis.size})"
+        )
+    return mask
+
+
+def _filtered_axis(axis: AxisLike, mask: np.ndarray) -> AxisLike:
+    """Copy of `axis` of the same type holding only the points where `mask` is True.
+    Only a SignalAxis can be empty."""
+    kept = np.asarray(axis.points)[mask]
+    if len(kept) == 0 and not isinstance(axis, SignalAxis):
+        raise ValueError(f"The selection on axis '{axis.name}' is empty")
+    common = {
+        "name": axis.name,
+        "index_in_array": axis.index_in_array,
+        "unit": axis.unit,
+        "navigate": axis.is_nav,
+    }
+    if isinstance(axis, CategoricalAxis):
+        return CategoricalAxis(kept.tolist(), **common)
+    return type(axis)(kept, **common)
+
+
 def compute_binning(
     axis: SignalAxis | UnorderedSignalAxis,
     bin_edges: Axis1D | None = None,
@@ -715,17 +762,42 @@ class DataBlock:
 
         return type(self)(new_data, new_axes, quantity=out_quantity, unit=out_unit)
 
+    def _select(
+        self, indexing: dict
+    ) -> tuple[da.Array | np.ndarray, list[AxisLike]]:
+        """Data and (new) axes after applying the selectors in `indexing`."""
+        if not isinstance(indexing, dict):
+            raise TypeError(f"Expected dict, got {type(indexing)}")
+
+        new_data = self.data
+        new_axes = deepcopy(self.axes)
+        for axis_name, selector in indexing.items():
+            if not self.has_axis(axis_name):
+                raise ValueError(f"Axis '{axis_name}' not found in DataBlock")
+
+            axis_obj = self.axis_obj(axis_name)
+            mask = _selector_to_mask(axis_obj, selector)
+            new_data = da.compress(
+                condition=mask, a=new_data, axis=axis_obj.index_in_array
+            )
+            new_axes[axis_obj.index_in_array] = _filtered_axis(axis_obj, mask)
+        return new_data, new_axes
+
     def get(self, indexing: dict) -> Self:
         """
         Advanced indexing method using dictionary specification.
 
         Args:
             indexing: Dictionary mapping axis names to either:
-                     - Inequality string (numeric axes): 'x<3', 'x>2', '-3<=x<3'
-                     - Equality string (categorical axes): 'category==dog', 'label!=positive'
-                     - Boolean array/list: np.array([True, False, ...])
+                     - Inequality string (numeric axes): 'x<3', 'x>2', '-3<=x<3',
+                       'x==2', 'x!=2'; the axis name may be left out of a simple
+                       comparison ('>2')
+                     - Equality string (categorical axes): 'category==dog',
+                       'label!=positive', "city=='new york'"
+                     - Boolean array/list with one entry per point of the axis
 
-        Axes not mentioned in the dict are not indexed (all values kept).
+        Axes not mentioned in the dict are not indexed (all values kept). The axis
+        types are kept; selecting no point is only possible on a SignalAxis.
 
         Examples:
             datablock.get({'x': 'x>2', 'y': 'y<1', 'e': '-3<=e<3'})
@@ -735,70 +807,14 @@ class DataBlock:
 
         Returns:
             DataBlock: New DataBlock with filtered data and updated axes
+
+        Raises:
+            TypeError: If `indexing` is no dict, or a selector is not a string or
+                boolean array.
+            ValueError: If an axis is unknown, an expression is invalid or a mask
+                has the wrong length or dimension.
         """
-        if not isinstance(indexing, dict):
-            raise TypeError(f"Expected dict, got {type(indexing)}")
-
-        if len(indexing) == 0:
-            return self
-
-        # Start with current data and axes
-        new_data = self.data
-        new_axes = deepcopy(self.axes)
-
-        # Process each axis in the indexing dict
-        for axis_name, selector in indexing.items():
-            if not self.has_axis(axis_name):
-                raise ValueError(f"Axis '{axis_name}' not found in DataBlock")
-
-            axis_obj = self.axis_obj(axis_name)
-            axis_idx = axis_obj.index_in_array
-
-            # Case 1: String expression
-            if isinstance(selector, str):
-                if isinstance(axis_obj, CategoricalAxis):
-                    mask = parse_categorical_to_mask(
-                        axis_name, selector, axis_obj.points
-                    )
-                else:
-                    mask = parse_inequality_to_mask(
-                        axis_name, selector, axis_obj.points
-                    )
-
-            # Case 2: Boolean array or list
-            elif isinstance(selector, (list, np.ndarray, da.Array)):
-                mask = np.array(selector) if isinstance(selector, list) else selector
-                if len(mask) != axis_obj.size:
-                    raise ValueError(
-                        f"Mask length ({len(mask)}) doesn't match axis '{axis_name}' size ({axis_obj.size})"
-                    )
-            else:
-                raise TypeError(
-                    f"Selector for axis '{axis_name}' must be string or boolean array, got {type(selector)}"
-                )
-
-            # Apply mask to data
-            new_data = da.compress(condition=mask, a=new_data, axis=axis_idx)
-
-            # Update corresponding axis
-            if isinstance(axis_obj, CategoricalAxis):
-                new_axis = CategoricalAxis(
-                    categories=axis_obj.points[mask].tolist(),
-                    name=axis_obj.name,
-                    index_in_array=axis_obj.index_in_array,
-                    unit=axis_obj.unit,
-                    navigate=axis_obj.is_nav,
-                )
-            else:
-                new_axis = SignalAxis(
-                    axis_points=axis_obj.points[mask],
-                    name=axis_obj.name,
-                    index_in_array=axis_obj.index_in_array,
-                    unit=axis_obj.unit,
-                    navigate=axis_obj.is_nav,
-                )
-            new_axes[axis_idx] = new_axis
-
+        new_data, new_axes = self._select(indexing)
         return type(self)(new_data, new_axes, self.quantity, self.unit)
 
     def value_get(
@@ -806,14 +822,7 @@ class DataBlock:
     ) -> tuple[da.Array | np.ndarray, dict[str, Axis1D]]:
         """
         Advanced indexing method that returns raw values instead of a DataBlock.
-
-        Args:
-            indexing: Dictionary mapping axis names to either:
-                     - Inequality string (numeric axes): 'x<3', 'x>2', '-3<=x<3'
-                     - Equality string (categorical axes): 'category==dog', 'label!=positive'
-                     - Boolean array/list: np.array([True, False, ...])
-
-        Axes not mentioned in the dict are not indexed (all values kept).
+        Accepts the same `indexing` as `get`.
 
         Examples:
             quantity_data, axes_dict = datablock.value_get({'x': 'x>2', 'y': 'y<1'})
@@ -825,77 +834,8 @@ class DataBlock:
                 - quantity_data: dask.array.Array with filtered quantity values
                 - axes_dict: dict mapping axis names to their numpy arrays
         """
-        if len(indexing) == 0:
-            # No filtering, return all data
-            axes_dict: dict[str, Axis1D] = {
-                axis.name: axis.points for axis in self.axes
-            }
-            return self.data, axes_dict
-
-        # Start with current data and axes
-        new_data: da.Array | np.ndarray = self.data
-        new_axes: list[SignalAxis | CategoricalAxis] = deepcopy(self.axes)
-
-        # Process each axis in the indexing dict
-        for axis_name, selector in indexing.items():
-            if not self.has_axis(axis_name):
-                raise ValueError(f"Axis '{axis_name}' not found in DataBlock")
-
-            axis_obj = self.axis_obj(axis_name)
-            axis_idx = axis_obj.index_in_array
-
-            # Case 1: String expression
-            if isinstance(selector, str):
-                if isinstance(axis_obj, CategoricalAxis):
-                    mask = parse_categorical_to_mask(
-                        axis_name, selector, axis_obj.points
-                    )
-                else:
-                    mask = parse_inequality_to_mask(
-                        axis_name, selector, axis_obj.points
-                    )
-
-            # Case 2: Boolean array or list
-            elif isinstance(selector, (list, np.ndarray, da.Array)):
-                mask = np.array(selector) if isinstance(selector, list) else selector
-
-                if len(mask) != axis_obj.size:
-                    raise ValueError(
-                        f"Mask length ({len(mask)}) doesn't match axis '{axis_name}' size ({axis_obj.size})"
-                    )
-            else:
-                raise TypeError(
-                    f"Selector for axis '{axis_name}' must be string or boolean array, got {type(selector)}"
-                )
-
-            # Apply mask to data
-            new_data = da.compress(condition=mask, a=new_data, axis=axis_idx)
-
-            # Update corresponding axis points
-            new_axes[axis_idx] = type(axis_obj)(
-                **(
-                    {
-                        "categories": axis_obj.points[mask].tolist(),
-                        "name": axis_obj.name,
-                        "index_in_array": axis_obj.index_in_array,
-                        "unit": axis_obj.unit,
-                        "navigate": axis_obj.is_nav,
-                    }
-                    if isinstance(axis_obj, CategoricalAxis)
-                    else {
-                        "axis_points": axis_obj.points[mask],
-                        "name": axis_obj.name,
-                        "index_in_array": axis_obj.index_in_array,
-                        "unit": axis_obj.unit,
-                        "navigate": axis_obj.is_nav,
-                    }
-                )
-            )
-
-        # Build axes dictionary
-        axes_dict: dict[str, Axis1D] = {axis.name: axis.points for axis in new_axes}
-
-        return new_data, axes_dict
+        new_data, new_axes = self._select(indexing)
+        return new_data, {axis.name: axis.points for axis in new_axes}
 
     def cluster(self, num_clusters: int = 3) -> Self:
         """
@@ -1688,17 +1628,45 @@ class Ensemble:
         )
         return type(self)(new_data, [*old_axes, new_axis], self.quantity, self.unit)
 
+    def _select(self, indexing: dict) -> dd.DataFrame | pd.DataFrame:
+        """Rows of the data that satisfy all selectors in `indexing`."""
+        if not isinstance(indexing, dict):
+            raise TypeError(f"Expected dict, got {type(indexing)}")
+
+        new_data = self.data
+        for axis_name, selector in indexing.items():
+            if not self.has_axis(axis_name):
+                raise ValueError(f"Axis '{axis_name}' not found in Ensemble")
+
+            axis_obj = self.axis_obj(axis_name)
+            if isinstance(selector, str):
+                if isinstance(axis_obj, CategoricalAxis):
+                    query_str = parse_categorical_to_query(axis_name, selector)
+                else:
+                    query_str = parse_inequality_to_query(axis_name, selector)
+                new_data = new_data.query(query_str)
+            else:
+                # A boolean mask selects points of the axis, like for a DataBlock
+                mask = _selector_to_mask(axis_obj, selector)
+                keep_values = np.asarray(axis_obj.points)[mask]
+                new_data = new_data[new_data[axis_name].isin(keep_values)]
+        return new_data
+
     def get(self, indexing: dict) -> Self:
         """
         Advanced indexing method using dictionary specification.
 
         Args:
             indexing: Dictionary mapping axis names to either:
-                     - Inequality string (numeric axes): 'x<3', 'x>2', '-3<=x<3'
-                     - Equality string (categorical axes): 'category==dog', 'label!=positive'
-                     - Boolean array/list: np.array([True, False, ...])
+                     - Inequality string (numeric axes): 'x<3', 'x>2', '-3<=x<3',
+                       'x==2', 'x!=2'; the axis name may be left out of a simple
+                       comparison ('>2')
+                     - Equality string (categorical axes): 'category==dog',
+                       'label!=positive', "city=='new york'"
+                     - Boolean array/list with one entry per point of the axis
 
-        Axes not mentioned in the dict are not indexed (all values kept).
+        Axes not mentioned in the dict are not indexed (all values kept). The
+        filtered axes keep the points that remain, in their original order.
 
         Examples:
             ensemble.get({'x': 'x>2', 'y': 'y<1', 'e': '-3<=e<3'})
@@ -1708,87 +1676,25 @@ class Ensemble:
 
         Returns:
             Ensemble: New Ensemble with filtered data
+
+        Raises:
+            TypeError: If `indexing` is no dict, or a selector is not a string or
+                boolean array.
+            ValueError: If an axis is unknown, an expression is invalid or a mask
+                has the wrong length or dimension.
         """
-        if not isinstance(indexing, dict):
-            raise TypeError(f"Expected dict, got {type(indexing)}")
+        new_data = self._select(indexing)
 
-        if len(indexing) == 0:
-            return self
-
-        # Start with current data
-        new_data = self.data
-
-        # Process each axis in the indexing dict
-        for axis_name, selector in indexing.items():
-            if not self.has_axis(axis_name):
-                raise ValueError(f"Axis '{axis_name}' not found in Ensemble")
-
-            axis_obj = self.axis_obj(axis_name)
-
-            # Case 1: String expression
-            if isinstance(selector, str):
-                if isinstance(axis_obj, CategoricalAxis):
-                    query_str = parse_categorical_to_query(axis_name, selector)
-                else:
-                    query_str = parse_inequality_to_query(axis_name, selector)
-                new_data = new_data.query(query_str)
-
-            # Case 2: Boolean array or list
-            elif isinstance(selector, (list, np.ndarray, da.Array)):
-                mask = np.array(selector) if isinstance(selector, list) else selector
-
-                # For ensemble, we need to create a mask based on axis values
-                # Get unique values in the axis column
-                axis_values = axis_obj.points
-
-                if len(mask) != len(axis_values):
-                    raise ValueError(
-                        f"Mask length ({len(mask)}) doesn't match axis '{axis_name}' unique values ({len(axis_values)})"
-                    )
-
-                # Create a mapping from axis value to boolean
-                keep_values = axis_values[mask]
-                new_data = new_data[new_data[axis_name].isin(keep_values)]
-            else:
-                raise TypeError(
-                    f"Selector for axis '{axis_name}' must be string or boolean array, got {type(selector)}"
-                )
-
-        # Update axes based on filtered data
-        new_axes = []
+        new_axes: list[AxisLike] = []
         for axis in self.axes:
             if axis.name in indexing:
-                # Get unique values from filtered data for this axis
-                unique_vals = new_data[axis.name].unique()
-
-                if isinstance(axis, CategoricalAxis):
-                    new_axis = CategoricalAxis(
-                        categories=unique_vals.tolist(),
-                        name=axis.name,
-                        index_in_array=axis.index_in_array,
-                        unit=axis.unit,
-                        navigate=axis.is_nav,
-                    )
-                elif isinstance(axis, SignalAxis):
-                    new_axis = SignalAxis(
-                        axis_points=unique_vals,
-                        name=axis.name,
-                        index_in_array=axis.index_in_array,
-                        unit=axis.unit,
-                        navigate=axis.is_nav,
-                    )
-                else:  # UnorderedSignalAxis
-                    new_axis = UnorderedSignalAxis(
-                        axis_points=unique_vals,
-                        name=axis.name,
-                        index_in_array=axis.index_in_array,
-                        unit=axis.unit,
-                        navigate=axis.is_nav,
-                    )
-                new_axes.append(new_axis)
+                present = new_data[axis.name].unique()
+                if hasattr(present, "compute"):
+                    present = present.compute()
+                remaining = np.isin(np.asarray(axis.points), np.asarray(present))
+                new_axes.append(_filtered_axis(axis, remaining))
             else:
-                # Axis not filtered, keep as is
-                new_axes.append(axis)
+                new_axes.append(deepcopy(axis))
 
         return type(self)(new_data, new_axes, self.quantity, self.unit)
 
@@ -1797,14 +1703,8 @@ class Ensemble:
     ) -> tuple[np.ndarray | da.Array, dict[str, np.ndarray]]:
         """
         Advanced indexing method that returns raw values instead of an Ensemble.
-
-        Args:
-            indexing: Dictionary mapping axis names to either:
-                     - Inequality string (numeric axes): 'x<3', 'x>2', '-3<=x<3'
-                     - Equality string (categorical axes): 'category==dog', 'label!=positive'
-                     - Boolean array/list: np.array([True, False, ...])
-
-        Axes not mentioned in the dict are not indexed (all values kept).
+        Accepts the same `indexing` as `get`; boolean masks select points of the
+        axis in both.
 
         Examples:
             quantity_values, axes_dict = ensemble.value_get({'x': 'x>2', 'y': 'y<1'})
@@ -1814,59 +1714,19 @@ class Ensemble:
         Returns:
             tuple: (quantity_values, axes_dict) where:
                 - quantity_values: numpy/dask array with filtered quantity values
-                - axes_dict: dict mapping axis names to their numpy arrays from DataFrame columns
+                - axes_dict: dict mapping axis names to their values per row
         """
-        if not isinstance(indexing, dict):
-            raise TypeError(f"Expected dict, got {type(indexing)}")
+        new_data = self._select(indexing)
 
-        # Start with current data
-        new_data = self.data
+        def values(column):
+            # Text columns can hold pandas string extension dtypes, which dask only
+            # converts to arrays with a warning
+            if column.dtype.kind not in "biufc":
+                column = column.astype(object)
+            return column.values
 
-        if len(indexing) == 0:
-            # No filtering, extract values directly from DataFrame
-            axes_dict = {axis.name: new_data[axis.name] for axis in self.axes}
-            quantity_values = new_data[self.quantity].values
-            return quantity_values, axes_dict
-
-        # Process each axis in the indexing dict
-        for axis_name, selector in indexing.items():
-            if not self.has_axis(axis_name):
-                raise ValueError(f"Axis '{axis_name}' not found in Ensemble")
-
-            axis_obj = self.axis_obj(axis_name)
-
-            # Case 1: String expression
-            if isinstance(selector, str):
-                if isinstance(axis_obj, CategoricalAxis):
-                    query_str = parse_categorical_to_query(axis_name, selector)
-                else:
-                    query_str = parse_inequality_to_query(axis_name, selector)
-                new_data = new_data.query(query_str)
-
-            # Case 2: Boolean array or list
-            elif isinstance(selector, (list, np.ndarray, da.Array)):
-                mask = np.array(selector) if isinstance(selector, list) else selector
-
-                # Get unique values directly from the DataFrame column
-                axis_values = new_data[axis_name]
-
-                # Create a mapping from axis value to boolean
-                keep_values = axis_values[mask]
-                new_data = new_data[new_data[axis_name].isin(keep_values)]
-            else:
-                raise TypeError(
-                    f"Selector for axis '{axis_name}' must be string or boolean array, got {type(selector)}"
-                )
-
-        # Build axes dictionary from filtered DataFrame columns
-        axes_dict = {}
-        for axis in self.axes:
-            axes_dict[axis.name] = new_data[axis.name].values
-
-        # Extract quantity values from DataFrame
-        quantity_values = new_data[self.quantity].values
-
-        return quantity_values, axes_dict
+        axes_dict = {axis.name: values(new_data[axis.name]) for axis in self.axes}
+        return values(new_data[self.quantity]), axes_dict
 
     def split_on_axis(self, axis_name: str | None = None) -> list[Self]:
         """
