@@ -79,7 +79,10 @@ class Axis:
 
 
 class SignalAxis(Axis):
-    """Axis of monotonically increasing points
+    """Axis of strictly increasing points
+
+    Raises ValueError for points that are not 1-D or not strictly increasing
+    (unsorted, descending, duplicated or NaN); use an UnorderedSignalAxis for those.
 
     Attributes:
         points: np.ndarray | dask.array.Array; axis coordinates
@@ -106,6 +109,15 @@ class SignalAxis(Axis):
         super().__init__(name, index_in_array, unit, navigate=navigate)
 
         self.points: Axis1D = np.array(axis_points)
+        if self.points.ndim != 1:
+            raise ValueError(
+                f"Points of axis '{name}' should be 1-D, got {self.points.ndim} dimensions"
+            )
+        if self.points.size > 1 and not np.all(np.diff(self.points) > 0):
+            raise ValueError(
+                f"Points of SignalAxis '{name}' should be strictly increasing, "
+                "use an UnorderedSignalAxis for other coordinates"
+            )
         self.ordered = True
         self.size: int = len(self.points)
         if self.size > 1:
