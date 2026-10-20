@@ -43,7 +43,7 @@ class Axis:
     def __len__(self) -> int:
         return self.size
 
-    def __eq__(self, other: object, /):
+    def __eq__(self, other: object, /) -> bool | np.ndarray:
         """Compares two axes by value, anything else elementwise against the points.
 
         Two axes are equal when they have the same type, name, unit and points; the
@@ -74,7 +74,8 @@ class Axis:
     def _points_array(self) -> np.ndarray:
         return np.asarray(getattr(self, "points", ()))
 
-    def _compare_points(self, value: object) -> object:
+    def _compare_points(self, value: object) -> object:  # ruff: ignore[unused-method-argument, no-self-use]
+        """Elementwise comparison with a scalar/array; unsupported unless overridden."""
         return NotImplemented
 
 

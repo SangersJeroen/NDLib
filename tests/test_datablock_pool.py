@@ -13,7 +13,7 @@ RAW = np.random.default_rng(0).random((10, 8, 5))
 def _block(raw: np.ndarray = RAW, names=("x", "y", "repetition")) -> DataBlock:
     axes = [
         SignalAxis(np.arange(n) * 0.5, name, i, "nm", navigate=True)
-        for i, (n, name) in enumerate(zip(raw.shape, names))
+        for i, (n, name) in enumerate(zip(raw.shape, names, strict=True))
     ]
     return DataBlock(
         da.from_array(raw, chunks=4), axes, quantity="intensity", unit="counts"

@@ -100,7 +100,11 @@ class TestElementwiseComparisonIsUnchanged:
     def test_signal_axis_against_scalar_and_array(self):
         axis = _signal()
 
-        np.testing.assert_array_equal(axis == 1.0, [False, True, False])
+        # Exact elementwise comparison is the behaviour under test
+        np.testing.assert_array_equal(
+            axis == 1.0,  # ruff: ignore[float-equality-comparison]
+            [False, True, False],
+        )
         np.testing.assert_array_equal(
             axis == np.array([0.0, 5.0, 2.0]), [True, False, True]
         )
@@ -111,4 +115,4 @@ class TestElementwiseComparisonIsUnchanged:
         np.testing.assert_array_equal(_categorical() == "b", [False, True])
 
     def test_unordered_axis_has_no_elementwise_comparison(self):
-        assert (_unordered() == 3.0) is False
+        assert (_unordered() == 3.0) is False  # ruff: ignore[float-equality-comparison]

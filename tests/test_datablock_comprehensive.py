@@ -302,20 +302,18 @@ class TestDataBlockGetMethod:
         ]
         db = DataBlock(data, axes)
 
-        mask = np.array(
-            [
-                True,
-                False,
-                True,
-                False,
-                True,
-                False,
-                True,
-                False,
-                True,
-                False,
-            ]
-        )
+        mask = np.array([
+            True,
+            False,
+            True,
+            False,
+            True,
+            False,
+            True,
+            False,
+            True,
+            False,
+        ])
         result = db.get({"x": mask})
         assert result.axes[0].size == 5
 
@@ -655,7 +653,7 @@ class TestDataBlockRebinAndReduce:
 
         assert result.axes == []
         assert result.shape == ()
-        assert float(result.compute()) == 4.0
+        assert float(result.compute()) == pytest.approx(4.0)
 
 
 class TestDataBlockReorderAxis:
@@ -843,7 +841,7 @@ class TestDataBlockSplitWithDatablock:
         result = self._data().split_with_datablock(self._mask(), drop_axes)
 
         assert len(result) == 2
-        for block, uval in zip(result, [0, 1]):
+        for block, uval in zip(result, [0, 1], strict=True):
             assert block.shape == (2, 3, 4)
             assert [ax.name for ax in block.axes] == ["a", "b", "c"]
             assert (block.quantity, block.unit) == ("signal", "counts")
@@ -866,7 +864,7 @@ class TestDataBlockSplitWithDatablock:
         result = self._data().split_with_datablock(self._mask(), ["a", "b"])
 
         assert [block.shape for block in result] == [(4, 3), (4, 3)]
-        for block, uval in zip(result, [0, 1]):
+        for block, uval in zip(result, [0, 1], strict=True):
             assert [ax.name for ax in block.axes] == ["c", "repetition"]
             assert [ax.index_in_array for ax in block.axes] == [0, 1]
             assert block.axes[1].unit == "#"
@@ -874,7 +872,9 @@ class TestDataBlockSplitWithDatablock:
             assert (block.quantity, block.unit) == ("signal", "counts")
             a_idx, b_idx = np.nonzero(uval == self.MASK)
             # Column r holds the full c-profile of the r-th matching (a, b) cell
-            expected = np.stack([self.RAW[a, b] for a, b in zip(a_idx, b_idx)], axis=1)
+            expected = np.stack(
+                [self.RAW[a, b] for a, b in zip(a_idx, b_idx, strict=True)], axis=1
+            )
             np.testing.assert_array_equal(block.compute(), expected)
 
     def test_drop_axes_as_string(self):

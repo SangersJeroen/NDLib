@@ -179,14 +179,12 @@ class TestDataBlockValueGet:
 
 def _ensemble(*, as_pandas=False) -> Ensemble:
     x, u, p = np.meshgrid(np.arange(4.0), U_POINTS, np.arange(3), indexing="ij")
-    df = pd.DataFrame(
-        {
-            "x": x.ravel(),
-            "u": u.ravel(),
-            "param": np.array(CATS)[p.ravel()],
-            "v": np.arange(x.size, dtype=float),
-        }
-    )
+    df = pd.DataFrame({
+        "x": x.ravel(),
+        "u": u.ravel(),
+        "param": np.array(CATS)[p.ravel()],
+        "v": np.arange(x.size, dtype=float),
+    })
     # Shuffle the rows so the order of appearance differs from the axis order
     df = df.sample(frac=1.0, random_state=0).reset_index(drop=True)
     axes = [

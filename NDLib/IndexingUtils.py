@@ -32,6 +32,7 @@ _COMPARISONS = {
     "==": operator.eq,
     "!=": operator.ne,
 }
+_MIN_QUOTED_LENGTH = 2  # the two quote characters
 _ASCENDING = ("<", "<=")
 
 
@@ -117,7 +118,11 @@ def _parse_categorical(axis_name: str, expr: str) -> tuple[str, str]:
     match = re.fullmatch(rf"(?:{name})?\s*(==|!=)\s*({CATEGORY_VALUE})", text)
     if match:
         op, value = match.groups()
-        if value[0] in "'\"" and value[-1] == value[0] and len(value) >= 2:
+        if (
+            value[0] in "'\""
+            and value[-1] == value[0]
+            and len(value) >= _MIN_QUOTED_LENGTH
+        ):
             value = value[1:-1]
         return op, value
 

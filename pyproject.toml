@@ -33,7 +33,7 @@ dependencies = [
 dev = [
     "basedpyright>=1.31.7",
     "prek",
-    "ruff",
+    "ruff>=0.17.1",
     "gitingest",
     "poethepoet",
     "radon",
@@ -103,7 +103,7 @@ quality = [
 # RUFF CONFIGURATION - MAXIMUM STRICTNESS
 # ============================================================
 [tool.ruff]
-target-version = "py312"
+target-version = "py311"  # matches requires-python
 line-length = 88
 indent-width = 4
 fix = true
@@ -140,10 +140,10 @@ select = [
 ]
 
 ignore = [
-    "E501",    # Line too long (formatter handles this)
-    "S603",    # subprocess without shell=True (too strict)
-    "S607",    # Starting a process with a partial path (too strict)
-    "PLR0904"
+    "line-too-long",    # Line too long (formatter handles this)
+    "subprocess-without-shell-equals-true",    # subprocess without shell=True (too strict)
+    "start-process-with-partial-path",    # Starting a process with a partial path (too strict)
+    "too-many-public-methods"
 ]
 
 # Complexity limits (anti-LLM-slop)
@@ -156,11 +156,15 @@ max-nested-blocks = 3  # Maximum nested block depth (PLR1702)
 # Per-file ignores
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = [
-    "F401",    # Allow unused imports in __init__.py
+    "unused-import",    # Allow unused imports in __init__.py
+]
+"NDLib/**/*.py" = [
+    "invalid-module-name",  # CamelCase modules (NDLib.BaseStructures, ...) are public API
 ]
 "tests/**/*.py" = [
-    "S101",    # Allow assert in tests
-    "PLR2004", # Allow magic values in tests
+    "no-self-use",  # test methods live in classes for grouping and rarely use self
+    "assert",    # Allow assert in tests
+    "magic-value-comparison", # Allow magic values in tests
     "ANN",     # Don't require annotations in tests
     "FBT",     # Allow boolean args in tests
 ]

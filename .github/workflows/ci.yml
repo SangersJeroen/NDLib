@@ -51,10 +51,9 @@ jobs:
           path: coverage.xml
           if-no-files-found: ignore
 
-  # Reports ruff findings without failing the build. Make these steps blocking by
-  # removing `continue-on-error` once the existing findings are fixed.
+  # Pinned to the version of the pre-commit hook so local and CI results agree
   lint:
-    name: Lint (advisory)
+    name: Lint
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -64,9 +63,8 @@ jobs:
         uses: astral-sh/setup-uv@v6
 
       - name: Ruff format
-        continue-on-error: true
-        run: uvx ruff format --check .
+        run: uvx ruff@0.17.1 format --check .
 
+      # The project config has `fix = true`, so say explicitly that CI only reports
       - name: Ruff check
-        continue-on-error: true
-        run: uvx ruff check . --output-format=github
+        run: uvx ruff@0.17.1 check . --no-fix --output-format=github

@@ -13,7 +13,7 @@ def _block(shape=(4, 3, 2), *, computed=False, quantity="intensity", unit="count
     names = ("x", "y", "z", "w")[: len(shape)]
     axes = [
         SignalAxis(np.arange(n) * 1.0, name, i, "nm", navigate=True)
-        for i, (n, name) in enumerate(zip(shape, names))
+        for i, (n, name) in enumerate(zip(shape, names, strict=True))
     ]
     data = raw if computed else da.from_array(raw, chunks=2)
     return DataBlock(data, axes, quantity=quantity, unit=unit), raw
@@ -51,12 +51,13 @@ class TestSqueezeKeepsQuantity:
         assert db.shape == (4,)
         assert db.quantity == "parameter"
 
-    def test_axes_are_renumbered_without_noise(self, capsys):
+    def test_axes_are_renumbered_without_a_warning(self, caplog):
         db, _ = _block()
 
-        db.crop_axis("y", 1.0, 1.0)
+        with caplog.at_level("WARNING"):
+            db.crop_axis("y", 1.0, 1.0)
 
-        assert "fixed axis index" not in capsys.readouterr().out
+        assert "fixed axis index" not in caplog.text
 
 
 class TestIterAxis:
@@ -162,7 +163,7 @@ class TestArithmetic:
         a, _ = _block()
         axes = [
             SignalAxis(np.arange(n) * 2.0, name, i, "nm", navigate=True)
-            for i, (n, name) in enumerate(zip((4, 3, 2), ("x", "y", "z")))
+            for i, (n, name) in enumerate(zip((4, 3, 2), ("x", "y", "z"), strict=True))
         ]
         b = DataBlock(da.from_array(np.ones((4, 3, 2)), chunks=2), axes)
 

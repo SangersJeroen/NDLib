@@ -1,6 +1,7 @@
 from collections.abc import Callable, Generator, Iterable, Sequence
 from copy import deepcopy
 import json
+import logging
 import operator
 from pathlib import Path
 from typing import (
@@ -33,7 +34,11 @@ from .IndexingUtils import (
 from .Types import Axis1D, Number
 
 AxisLike: TypeAlias = SignalAxis | UnorderedSignalAxis | CategoricalAxis
+Operand: TypeAlias = "DataBlock | Number | np.ndarray"
 TwoSeriesOperation: TypeAlias = Callable[[pd.Series, pd.Series], pd.Series]
+
+
+logger = logging.getLogger(__name__)
 
 
 def return_axis_idx(axis: SignalAxis | UnorderedSignalAxis) -> int:
@@ -113,6 +118,40 @@ def compute_binning(
     return bin_edges, bin_centers
 
 
+def _normalise_drop_axes(drop_axes: list[str] | str | None) -> list[str]:
+    """The axis names in `drop_axes` as a list; None means no axes."""
+    if drop_axes is None:
+        return []
+    if isinstance(drop_axes, str):
+        return [drop_axes]
+    if isinstance(drop_axes, list):
+        return drop_axes
+    raise ValueError(
+        f"drop_axes should be list[str], str or None.\nGot {type(drop_axes)}"
+    )
+
+
+def _pool_points(axis: AxisLike, window: int, remainder: str) -> tuple[np.ndarray, int]:
+    """Points of `axis` cut (trim) or NaN-padded (pad) to whole windows, and the
+    number of padded points. Raises ValueError where `remainder` forbids it."""
+    leftover = axis.size % window
+    points = np.asarray(axis.points)
+    if leftover and remainder == "error":
+        raise ValueError(
+            f"Axis {axis.name} of size {axis.size} is not divisible by {window}"
+        )
+    if remainder == "trim":
+        if axis.size < window:
+            raise ValueError(
+                f"Window {window} is larger than axis {axis.name} of size {axis.size}"
+            )
+        return points[: axis.size - leftover], 0
+    if leftover:
+        pad = window - leftover
+        return np.pad(points.astype(float), (0, pad), constant_values=np.nan), pad
+    return points, 0
+
+
 class DataBlock:
     """Datastructure for n-dimensional structured dataset with coordinate axes.
 
@@ -180,7 +219,7 @@ class DataBlock:
     def __str__(self) -> str:
         return self.__repr__()
 
-    def __post_init_db__(self) -> None:
+    def __post_init_db__(self) -> None:  # ruff: ignore[bad-dunder-method-name]
         self.axes.sort(key=return_axis_idx)
         axis_indices: list[int] = [axis.index_in_array for axis in self.axes]
         axis_sizes: list[int] = [axis.size for axis in self.axes]
@@ -191,8 +230,11 @@ class DataBlock:
                     f"Mismatch along dimension {dim}\n{self.axes[dim].name} has length {axis_sizes[dim]} but data has length {data_shape[dim]} along dimension"
                 )
             if axis_indices[dim] != dim:
-                print(
-                    f"fixed axis index, {self.axes[dim].name} at dim={dim} had index: {axis_indices[dim]}"
+                logger.warning(
+                    "fixed axis index, %s at dim=%d had index: %d",
+                    self.axes[dim].name,
+                    dim,
+                    axis_indices[dim],
                 )
                 self.axes[dim].index_in_array = dim
 
@@ -203,7 +245,7 @@ class DataBlock:
         new_self.quantity = new_name
         return new_self
 
-    def c_op(self, axis, operation) -> Self:
+    def c_op(self, axis: str, operation: Callable) -> Self:
         raise NotImplementedError()
 
     def _moved(
@@ -484,7 +526,7 @@ class DataBlock:
                 mine.name == theirs.name
                 and mine.size == theirs.size
                 and np.array_equal(mine.points, theirs.points)
-                for mine, theirs in zip(self.axes, other.axes)
+                for mine, theirs in zip(self.axes, other.axes, strict=True)
             )
             if not same_axes:
                 raise ValueError(
@@ -496,34 +538,34 @@ class DataBlock:
             operation(left, right), deepcopy(self.axes), self.quantity, self.unit
         )
 
-    def __add__(self, other):
+    def __add__(self, other: Operand) -> Self:
         return self._binary_op(other, operator.add)
 
-    def __radd__(self, other):
+    def __radd__(self, other: Operand) -> Self:
         return self._binary_op(other, operator.add, reflected=True)
 
-    def __sub__(self, other):
+    def __sub__(self, other: Operand) -> Self:
         return self._binary_op(other, operator.sub)
 
-    def __rsub__(self, other):
+    def __rsub__(self, other: Operand) -> Self:
         return self._binary_op(other, operator.sub, reflected=True)
 
-    def __mul__(self, other):
+    def __mul__(self, other: Operand) -> Self:
         return self._binary_op(other, operator.mul)
 
-    def __rmul__(self, other):
+    def __rmul__(self, other: Operand) -> Self:
         return self._binary_op(other, operator.mul, reflected=True)
 
-    def __truediv__(self, other):
+    def __truediv__(self, other: Operand) -> Self:
         return self._binary_op(other, operator.truediv)
 
-    def __rtruediv__(self, other):
+    def __rtruediv__(self, other: Operand) -> Self:
         return self._binary_op(other, operator.truediv, reflected=True)
 
-    def __pow__(self, other):
+    def __pow__(self, other: Operand) -> Self:
         return self._binary_op(other, operator.pow)
 
-    def __neg__(self):
+    def __neg__(self) -> Self:
         return type(self)(-self.data, deepcopy(self.axes), self.quantity, self.unit)
 
     def crop_axis(self, axis_name: str, min: float, max: float) -> Self:
@@ -646,11 +688,37 @@ class DataBlock:
                 unknown, a window is larger than its axis while trimming, or the
                 axis does not divide into windows while `remainder="error"`.
         """
-        if remainder not in ("trim", "error", "pad"):
+        if remainder not in {"trim", "error", "pad"}:
             raise ValueError(
                 f"remainder should be 'trim', 'error' or 'pad', got {remainder!r}"
             )
 
+        factors = self._pool_factors(windows)
+        data = da.asarray(self.data)
+        new_axes = deepcopy(self.axes)
+        window_mean = np.nanmean if remainder == "pad" else np.mean
+        for index, window in factors.items():
+            axis = self.axes[index]
+            points, pad = _pool_points(axis, window, remainder)
+            if pad:
+                widths = [(0, pad) if i == index else (0, 0) for i in range(data.ndim)]
+                data = da.pad(data.astype(float), widths, constant_values=np.nan)
+            new_axes[index] = type(axis)(
+                window_mean(points.reshape(-1, window), axis=1),
+                name=axis.name,
+                index_in_array=axis.index_in_array,
+                unit=axis.unit,
+                navigate=axis.is_nav,
+            )
+
+        if factors:
+            data = da.coarsen(reducer, data, factors, trim_excess=remainder == "trim")
+        if isinstance(self.data, np.ndarray):
+            data = data.compute()
+        return type(self)(data, new_axes, self.quantity, self.unit)
+
+    def _pool_factors(self, windows: dict[str, int]) -> dict[int, int]:
+        """Validated windows larger than 1, keyed by the index of their axis."""
         factors: dict[int, int] = {}
         for axis_name, window in windows.items():
             if not self.has_axis(axis_name):
@@ -668,43 +736,7 @@ class DataBlock:
                 raise ValueError(f"Window for {axis_name} should be >= 1, got {window}")
             if window > 1:
                 factors[axis.index_in_array] = int(window)
-
-        data = da.asarray(self.data)
-        new_axes = deepcopy(self.axes)
-        for index, window in factors.items():
-            axis = self.axes[index]
-            leftover = axis.size % window
-            points = np.asarray(axis.points)
-            if leftover and remainder == "error":
-                raise ValueError(
-                    f"Axis {axis.name} of size {axis.size} is not divisible by {window}"
-                )
-            if remainder == "trim":
-                if axis.size < window:
-                    raise ValueError(
-                        f"Window {window} is larger than axis {axis.name} of size {axis.size}"
-                    )
-                points = points[: axis.size - leftover]
-            elif leftover:
-                pad = window - leftover
-                widths = [(0, pad) if i == index else (0, 0) for i in range(data.ndim)]
-                data = da.pad(data.astype(float), widths, constant_values=np.nan)
-                points = np.pad(points.astype(float), (0, pad), constant_values=np.nan)
-
-            window_mean = np.nanmean if remainder == "pad" else np.mean
-            new_axes[index] = type(axis)(
-                window_mean(points.reshape(-1, window), axis=1),
-                name=axis.name,
-                index_in_array=axis.index_in_array,
-                unit=axis.unit,
-                navigate=axis.is_nav,
-            )
-
-        if factors:
-            data = da.coarsen(reducer, data, factors, trim_excess=remainder == "trim")
-        if isinstance(self.data, np.ndarray):
-            data = data.compute()
-        return type(self)(data, new_axes, self.quantity, self.unit)
+        return factors
 
     def reduce_axis(
         self,
@@ -907,20 +939,7 @@ class DataBlock:
         If `drop_axes` is None then the output datablocks will retain their shape
         but values not in the cluster will be masked with `np.nan`.
         """
-        if drop_axes is None:
-            drop_any: bool = False
-            drop_axes: list = []
-        elif isinstance(drop_axes, str):
-            drop_any: bool = True
-            drop_axes: list[str] = [drop_axes]
-        elif isinstance(drop_axes, list) and len(drop_axes) == 0:
-            drop_any = False
-        elif isinstance(drop_axes, list) and len(drop_axes) != 0:
-            drop_any = True
-        else:
-            raise ValueError(
-                f"drop_axes should be list[str], str or None.\nGot {type(drop_axes)}"
-            )
+        drop_names = _normalise_drop_axes(drop_axes)
 
         for axis in other.axes:
             if not self.has_axis(axis.name):
@@ -928,8 +947,8 @@ class DataBlock:
                     f"Split on datablock has axes unkown to the to be splitted datablock\n\t{axis.name} not found for {self}"
                 )
 
-        if drop_any:
-            ragged = [axis.name for axis in other.axes if axis.name not in drop_axes]
+        if drop_names:
+            ragged = [axis.name for axis in other.axes if axis.name not in drop_names]
             if ragged:
                 raise ValueError(
                     "Every axis of `other` must be in drop_axes, otherwise the "
@@ -939,71 +958,60 @@ class DataBlock:
         missing: list[int] = [
             axis.index_in_array for axis in self.axes if not other.has_axis(axis.name)
         ]
-
-        if drop_any:
-            new_axes: list[SignalAxis | CategoricalAxis] = [
-                deepcopy(axis) for axis in self.axes if axis.name not in drop_axes
-            ]
-        else:
-            new_axes: list[SignalAxis | CategoricalAxis] = deepcopy(self.axes)
-
+        new_axes: list[AxisLike] = [
+            deepcopy(axis) for axis in self.axes if axis.name not in drop_names
+        ]
         for i, axis in enumerate(new_axes):
             axis.index_in_array = i
-
         new_shape = tuple(axis.size for axis in new_axes)
 
         split_blocks: list[Self] = []
-        unique_values = da.unique(other.quantity_data()).compute()
-        unique_values = np.sort(unique_values)
+        unique_values = np.sort(da.unique(other.quantity_data()).compute())
         for uval in unique_values:
             mask = other.quantity_data() == uval
             mask = da.expand_dims(mask, axis=tuple(missing[::-1]))
             mask = da.broadcast_to(mask, self.data.shape)
 
-            if drop_any:
-                # Dropped axes first: the selected values then come out grouped per
-                # kept-axes position, which is what the reshape below relies on
-                dropped_idx = [
-                    axis.index_in_array for axis in self.axes if axis.name in drop_axes
+            if drop_names:
+                new_data = self._collect_matching(mask, drop_names, new_shape)
+                block_axes = [
+                    *deepcopy(new_axes),
+                    SignalAxis(
+                        axis_points=np.arange(new_data.shape[-1]),
+                        name="repetition",
+                        index_in_array=len(new_axes),
+                        unit="#",
+                        navigate=False,
+                    ),
                 ]
-                kept_idx = [
-                    axis.index_in_array
-                    for axis in self.axes
-                    if axis.name not in drop_axes
-                ]
-                order = (*dropped_idx, *kept_idx)
-                matching = da.transpose(self.data, order)[da.transpose(mask, order)]
-                matching.compute_chunk_sizes()
-                n_repetitions = matching.shape[0] // int(np.prod(new_shape))
-                new_data = da.moveaxis(
-                    matching.reshape((n_repetitions, *new_shape)), 0, -1
-                )
-                new_axis = SignalAxis(
-                    axis_points=np.arange(new_data.shape[-1]),
-                    name="repetition",
-                    index_in_array=len(new_axes),
-                    unit="#",
-                    navigate=False,
-                )
-                split_blocks.append(
-                    type(self)(
-                        new_data,
-                        [*new_axes, new_axis],
-                        quantity=self.quantity,
-                        unit=self.unit,
-                    )
-                )
-
             else:
                 new_data = da.where(mask, self.data, da.ones(self.data.shape) * np.nan)
-                split_blocks.append(
-                    type(self)(
-                        new_data, new_axes, quantity=self.quantity, unit=self.unit
-                    )
-                )
+                block_axes = deepcopy(new_axes)
+            split_blocks.append(
+                type(self)(new_data, block_axes, self.quantity, self.unit)
+            )
         return split_blocks
 
-    def to_ensemble(self):
+    def _collect_matching(
+        self, mask: da.Array, drop_names: list[str], kept_shape: tuple[int, ...]
+    ) -> da.Array:
+        """Values where `mask` is True as an array of shape (*kept_shape, repetitions).
+
+        The dropped axes are moved to the front first: the selected values then come
+        out grouped per position along the kept axes, which the reshape relies on."""
+        dropped_idx = [
+            axis.index_in_array for axis in self.axes if axis.name in drop_names
+        ]
+        kept_idx = [
+            axis.index_in_array for axis in self.axes if axis.name not in drop_names
+        ]
+        order = (*dropped_idx, *kept_idx)
+        matching = da.transpose(self.data, order)[da.transpose(mask, order)]
+        matching.compute_chunk_sizes()
+        n_repetitions = matching.shape[0] // int(np.prod(kept_shape))
+        return da.moveaxis(matching.reshape((n_repetitions, *kept_shape)), 0, -1)
+
+    def to_ensemble(self) -> "Ensemble":
         return Ensemble.from_datablock(datablock=self)
 
 
@@ -1155,7 +1163,8 @@ class Ensemble:
             new_axes.append(new_axis)
         axes: list[SignalAxis | CategoricalAxis] = new_axes
         coord_block: da.Array = (
-            da.stack([mgrid[i].flatten() for i in range(len(axes))] + [data])
+            da
+            .stack([mgrid[i].flatten() for i in range(len(axes))] + [data])
             .rechunk({0: -1, 1: "auto"}, block_size_limit=1e8)
             .T
         )
@@ -1269,7 +1278,8 @@ class Ensemble:
             raise ValueError(f"out_quantity '{out_quantity}' is the name of an axis")
 
         new_view = (
-            self.data.groupby(sort_axes, observed=True)[self.quantity]
+            self.data
+            .groupby(sort_axes, observed=True)[self.quantity]
             .agg(reducer)
             .reset_index()
             .rename(columns={self.quantity: out_quantity})
@@ -1301,16 +1311,15 @@ class Ensemble:
         sort_axes = [axis.name for axis in self.axes] + [rebin_axis]
         sort_axes.remove(relevant_axis.name)
 
-        new_view = self.data.assign(
-            **{
-                rebin_axis: self.data[relevant_axis.name].map_partitions(
-                    pd.cut, bins=bin_edges, include_lowest=True, labels=False
-                )
-            }
-        )
+        new_view = self.data.assign(**{
+            rebin_axis: self.data[relevant_axis.name].map_partitions(
+                pd.cut, bins=bin_edges, include_lowest=True, labels=False
+            )
+        })
         new_view = new_view.dropna()
         new_view = (
-            new_view.groupby(sort_axes, observed=True)[self.quantity]
+            new_view
+            .groupby(sort_axes, observed=True)[self.quantity]
             .agg(list, meta=(self.quantity, "float64"))
             .reset_index()
         )
@@ -1386,25 +1395,21 @@ class Ensemble:
 
         if isinstance(self.data, dd.DataFrame):
             self.data: dd.DataFrame
-            new_view = self.data.assign(
-                **{
-                    rebin_axis: self.data[relevant_axis.name].map_partitions(
-                        pd.cut, bins=bin_edges, include_lowest=True, labels=False
-                    )
-                }
-            )
+            new_view = self.data.assign(**{
+                rebin_axis: self.data[relevant_axis.name].map_partitions(
+                    pd.cut, bins=bin_edges, include_lowest=True, labels=False
+                )
+            })
         else:
             self.data: pd.DataFrame
-            new_view = self.data.assign(
-                **{
-                    rebin_axis: pd.cut(
-                        self.data[relevant_axis.name],
-                        bins=bin_edges,
-                        include_lowest=True,
-                        labels=False,
-                    )
-                }
-            )
+            new_view = self.data.assign(**{
+                rebin_axis: pd.cut(
+                    self.data[relevant_axis.name],
+                    bins=bin_edges,
+                    include_lowest=True,
+                    labels=False,
+                )
+            })
 
         new_view = new_view.dropna()
 
@@ -1476,13 +1481,11 @@ class Ensemble:
         rebin_axis = relevant_axis.name + "_bin"
 
         # Assign bin indices
-        new_view = self.data.assign(
-            **{
-                rebin_axis: self.data[relevant_axis.name].map_partitions(
-                    pd.cut, bins=bin_edges, include_lowest=True, labels=False
-                )
-            }
-        ).dropna()
+        new_view = self.data.assign(**{
+            rebin_axis: self.data[relevant_axis.name].map_partitions(
+                pd.cut, bins=bin_edges, include_lowest=True, labels=False
+            )
+        }).dropna()
 
         mapping = dict(enumerate(bin_centers))
 
@@ -1585,7 +1588,11 @@ class Ensemble:
         right_axes = [ax.name for ax in other.axes]
         common_axes = list(set(left_axes) & set(right_axes))
 
-        def _function(partition, other_data, operation):
+        def _function(
+            partition: pd.DataFrame,
+            other_data: pd.DataFrame,
+            operation: TwoSeriesOperation,
+        ) -> pd.DataFrame:
             new_part = partition.merge(
                 other_data, how="left", on=common_axes, suffixes=("", "_other")
             )
@@ -1727,7 +1734,7 @@ class Ensemble:
         """
         new_data = self._select(indexing)
 
-        def values(column):
+        def values(column: dd.Series | pd.Series) -> np.ndarray | da.Array:
             # Text columns can hold pandas string extension dtypes, which dask only
             # converts to arrays with a warning
             if column.dtype.kind not in "biufc":
@@ -1781,6 +1788,22 @@ class Ensemble:
             )
 
         return split_ensembles
+
+    def _axes_present_in(
+        self, data: dd.DataFrame | pd.DataFrame, drop_axes: list[str]
+    ) -> list[AxisLike]:
+        """Copies of the axes not in `drop_axes`, keeping the points found in `data`."""
+        new_axes: list[AxisLike] = []
+        for axis in self.axes:
+            if axis.name in drop_axes:
+                continue
+            column = data[axis.name]
+            if hasattr(column, "compute"):
+                column = column.compute()
+            present = np.isin(np.asarray(axis.points), column.unique())
+            new_axes.append(_filtered_axis(axis, present))
+            new_axes[-1].index_in_array = len(new_axes) - 1
+        return new_axes
 
     def split_with_ensemble(
         self, other: Self, drop_axes: list[str] | str
@@ -1839,26 +1862,7 @@ class Ensemble:
             filtered_data = merged_data[merged_data[other.quantity] == uval]
 
             # Every split gets its own axes holding only the coordinates it contains
-            new_axes: list[AxisLike] = []
-            for axis in self.axes:
-                if axis.name in drop_axes:
-                    continue
-                column = filtered_data[axis.name]
-                if hasattr(column, "compute"):
-                    column = column.compute()
-                values = np.sort(column.unique())
-                axis_kwargs = {
-                    "name": axis.name,
-                    "index_in_array": len(new_axes),
-                    "unit": axis.unit,
-                    "navigate": axis.is_nav,
-                }
-                if isinstance(axis, CategoricalAxis):
-                    new_axes.append(CategoricalAxis(list(values), **axis_kwargs))
-                elif isinstance(axis, UnorderedSignalAxis):
-                    new_axes.append(UnorderedSignalAxis(values, **axis_kwargs))
-                else:
-                    new_axes.append(SignalAxis(values, **axis_kwargs))
+            new_axes = self._axes_present_in(filtered_data, drop_axes)
 
             # Drop the mask column and any dropped axes
             columns_to_keep = [ax.name for ax in new_axes] + [self.quantity]
