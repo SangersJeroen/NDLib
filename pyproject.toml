@@ -38,7 +38,8 @@ dev = [
     "poethepoet",
     "radon",
     "skylos",
-    "ty"
+    "ty",
+    "dask-ml",  # optional: DataBlock.cluster
 ]
 
 [tool.setuptools.packages.find]

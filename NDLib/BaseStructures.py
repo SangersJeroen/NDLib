@@ -154,36 +154,40 @@ class DataBlock:
 
     def reorder_axis(self, axis_name: str, target_index: int) -> None:
         """
-        Allows reording of both axis and data.
+        Moves axis `axis_name` to dimension `target_index` (in place), shifting the
+        axes in between, like `np.moveaxis`. Both axes and data are reordered.
         Will call `__post_init_db__` to verify data shape and axes match.
 
         Args:
             axis_name: str, name of axis to reorder
-            target_index: int, dimensional position to move axis to
+            target_index: int, dimensional position to move axis to, negative
+                values count from the last dimension
 
         Raises:
             RuntimeError: If axis with `axis_name` not known.
+            ValueError: If `target_index` is outside the dimensions of the datablock.
         """
         if not self.has_axis(axis_name):
             raise RuntimeError(f"{self} has no axis: {axis_name}")
-        if self.axes[target_index].name == axis_name:
-            # TODO: this method should pass unmodified self
-            pass
+        if not -self.dims <= target_index < self.dims:
+            raise ValueError(
+                f"target_index {target_index} out of range for {self.dims} dimensions"
+            )
 
-        old_axes = deepcopy(self.axes)
+        target_index %= self.dims
         old_index = self.axis_obj(axis_name).index_in_array
-        if self.axes[target_index].name != axis_name:
-            axis_at_target = old_axes[target_index]
+        if old_index == target_index:
+            return
 
-            old_axes[target_index] = self.axes[old_index]
-            old_axes[target_index].index_in_array = target_index
-            old_axes[old_index] = axis_at_target
-            old_axes[old_index].index_in_array = old_index
+        new_axes = deepcopy(self.axes)
+        new_axes.insert(target_index, new_axes.pop(old_index))
+        for i, axis in enumerate(new_axes):
+            axis.index_in_array = i
 
-            self.axes = old_axes
-            self.data = da.swapaxes(self.data, target_index, old_index)
-
-            self.__post_init_db__()
+        array_module = np if isinstance(self.data, np.ndarray) else da
+        self.axes = new_axes
+        self.data = array_module.moveaxis(self.data, old_index, target_index)
+        self.__post_init_db__()
 
     def compute(self) -> np.ndarray:
         """Computes or returns the quantity in self.data depending on

@@ -874,6 +874,15 @@ class TestEnsembleSplitWithEnsemble:
             self._data().split_with_ensemble(other, "q")
 
 
+class TestEnsembleNotImplementedMethods:
+    """Ensemble placeholders must keep failing loudly until implemented"""
+
+    @pytest.mark.parametrize("method", ["reorder_axis", "crop_axis", "cluster"])
+    def test_raises_not_implemented(self, method):
+        with pytest.raises(NotImplementedError):
+            getattr(_xy_ensemble(), method)()
+
+
 class TestEnsembleRebinToNewAxisCoverage:
     def test_rebin_to_new_axis_binsize(self):
         result = _xy_ensemble().rebin_to_new_axis("x", new_binsize=3.0)

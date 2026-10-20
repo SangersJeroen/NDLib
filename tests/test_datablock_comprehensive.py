@@ -650,6 +650,136 @@ class TestDataBlockRebinAndReduce:
         assert float(result.compute()) == 4.0
 
 
+class TestDataBlockReorderAxis:
+    """reorder_axis: move one axis to a new dimension, in place"""
+
+    RAW = np.arange(24, dtype=float).reshape(2, 3, 4)
+
+    def _block(self, *, computed=False) -> DataBlock:
+        axes = [
+            SignalAxis(np.arange(n) * 1.0, name, i, "nm", navigate=True)
+            for i, (n, name) in enumerate([(2, "a"), (3, "b"), (4, "c")])
+        ]
+        data = self.RAW.copy() if computed else da.from_array(self.RAW, chunks=2)
+        return DataBlock(data, axes, quantity="signal", unit="counts")
+
+    @pytest.mark.parametrize(
+        ("axis_name", "target", "names", "source"),
+        [
+            ("c", 0, ["c", "a", "b"], 2),
+            ("a", 2, ["b", "c", "a"], 0),
+            ("a", -1, ["b", "c", "a"], 0),
+            ("c", -3, ["c", "a", "b"], 2),
+            ("b", 0, ["b", "a", "c"], 1),
+            ("b", 2, ["a", "c", "b"], 1),
+        ],
+    )
+    def test_moves_axis_and_data(self, axis_name, target, names, source):
+        db = self._block()
+
+        db.reorder_axis(axis_name, target)
+
+        assert [ax.name for ax in db.axes] == names
+        assert [ax.index_in_array for ax in db.axes] == [0, 1, 2]
+        assert db.shape == tuple(ax.size for ax in db.axes)
+        np.testing.assert_array_equal(
+            db.compute(), np.moveaxis(self.RAW, source, target)
+        )
+        assert (db.quantity, db.unit) == ("signal", "counts")
+
+    def test_axis_points_follow_their_data(self):
+        db = self._block()
+
+        db.reorder_axis("c", 0)
+
+        np.testing.assert_array_equal(db.axis_p("c"), np.arange(4))
+        assert db.axis_obj("c").index_in_array == 0
+        assert db.axis_obj("a").index_in_array == 1
+
+    def test_same_position_is_a_noop(self):
+        db = self._block()
+
+        db.reorder_axis("b", 1)
+
+        assert [ax.name for ax in db.axes] == ["a", "b", "c"]
+        np.testing.assert_array_equal(db.compute(), self.RAW)
+
+    def test_stays_lazy_for_dask_data(self):
+        db = self._block()
+
+        db.reorder_axis("c", 0)
+
+        assert isinstance(db.data, da.Array)
+        assert not db._computed
+
+    def test_computed_data_stays_a_numpy_array(self):
+        db = self._block(computed=True)
+
+        db.reorder_axis("c", 0)
+
+        assert isinstance(db.data, np.ndarray)
+        assert isinstance(db.compute(), np.ndarray)
+        np.testing.assert_array_equal(db.compute(), np.moveaxis(self.RAW, 2, 0))
+
+    def test_unknown_axis(self):
+        with pytest.raises(RuntimeError, match="no axis: z"):
+            self._block().reorder_axis("z", 0)
+
+    @pytest.mark.parametrize("target", [3, -4, 10])
+    def test_target_out_of_range_leaves_block_untouched(self, target):
+        db = self._block()
+
+        with pytest.raises(ValueError, match="out of range"):
+            db.reorder_axis("a", target)
+
+        assert [ax.name for ax in db.axes] == ["a", "b", "c"]
+        np.testing.assert_array_equal(db.compute(), self.RAW)
+
+
+class TestDataBlockCluster:
+    """cluster: k-means labels of the quantity values"""
+
+    @staticmethod
+    def _block() -> DataBlock:
+        # Three well separated levels so the partition is deterministic
+        rng = np.random.default_rng(0)
+        levels = np.repeat([0.0, 100.0, 200.0], 40).reshape(3, 40)
+        noise = rng.uniform(0.0, 1.0, size=(3, 40))
+        axes = [
+            SignalAxis(np.arange(3) * 1.0, "x", 0, "nm", navigate=True),
+            SignalAxis(np.arange(40) * 1.0, "y", 1, "nm", navigate=True),
+        ]
+        return DataBlock(da.from_array(levels + noise, chunks=(3, 20)), axes)
+
+    def test_without_dask_ml_raises(self, monkeypatch):
+        monkeypatch.setattr("NDLib.BaseStructures.DASKML", False)
+
+        with pytest.raises(ImportError, match="dask-ml"):
+            self._block().cluster()
+
+    def test_labels_group_equal_levels(self):
+        pytest.importorskip("dask_ml")
+        db = self._block()
+
+        result = db.cluster(num_clusters=3)
+
+        labels = np.asarray(result.compute())
+        assert result.shape == db.shape
+        assert (result.quantity, result.unit) == ("cluster", "-")
+        assert [ax.name for ax in result.axes] == ["x", "y"]
+        assert result.axes[0] is not db.axes[0]
+        # every row is one cluster, and the three rows are three different clusters
+        assert all(len(set(row)) == 1 for row in labels)
+        assert len({row[0] for row in labels}) == 3
+
+    def test_default_cluster_count(self):
+        pytest.importorskip("dask_ml")
+
+        labels = np.asarray(self._block().cluster().compute())
+
+        assert len(np.unique(labels)) == 3
+
+
 class TestDataBlockSplitOperations:
     """Test split_on_axis operations"""
 
