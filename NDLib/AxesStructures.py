@@ -43,6 +43,40 @@ class Axis:
     def __len__(self) -> int:
         return self.size
 
+    def __eq__(self, other: object, /):
+        """Compares two axes by value, anything else elementwise against the points.
+
+        Two axes are equal when they have the same type, name, unit and points; the
+        position in the array and the navigation flag are layout and not compared.
+        Against a scalar or array the result is the array of elementwise comparisons
+        (subclasses decide whether that is supported, see `_compare_points`).
+        """
+        if isinstance(other, Axis):
+            return (
+                type(self) is type(other)
+                and self.name == other.name
+                and self.unit == other.unit
+                and np.array_equal(self._points_array(), other._points_array())
+            )
+        return self._compare_points(other)
+
+    def __hash__(self) -> int:
+        """Hash consistent with `__eq__`. Do not modify `points` while an axis is
+        stored in a set or used as a dictionary key."""
+        points = self._points_array()
+        if points.dtype.kind in "biuf":
+            # int and float axes with equal values are equal, so hash them alike
+            content: object = (points.astype(np.float64) + 0.0).tobytes()
+        else:
+            content = tuple(points.tolist())
+        return hash((type(self).__name__, self.name, self.unit, content))
+
+    def _points_array(self) -> np.ndarray:
+        return np.asarray(getattr(self, "points", ()))
+
+    def _compare_points(self, value: object) -> object:
+        return NotImplemented
+
 
 class SignalAxis(Axis):
     """Axis of monotonically increasing points
@@ -81,7 +115,9 @@ class SignalAxis(Axis):
         else:
             self.scale = np.inf
 
-    def __eq__(self, value: object, /) -> np.ndarray[Literal[1], np.dtype[np.bool_]]:
+    def _compare_points(
+        self, value: object
+    ) -> np.ndarray[Literal[1], np.dtype[np.bool_]]:
         return np.equal(self.points, value)
 
     def __gt__(self, value: object, /) -> np.ndarray[Literal[1], np.dtype[np.bool_]]:
@@ -104,10 +140,6 @@ class SignalAxis(Axis):
             f"monotonic axis: '{self.name}'\t: {self.size} bins\n"
             + f"{self.min:.2f} {self.unit} <--------step: {self.scale:.2f} {self.unit}--------> {self.max:.2f} {self.unit}"
         )
-
-    def __hash__(self) -> int:
-        return hash(self.points)
-
 
 class UnorderedSignalAxis(Axis):
     """[TODO:description]
@@ -170,9 +202,6 @@ class UnorderedSignalAxis(Axis):
             self.points = self.points[self.points < max]
             self.__post_init__()
 
-    def __hash__(self) -> int:
-        return hash(self.points)
-
 
 class CategoricalAxis(Axis):
     """Axis of categories (strings)
@@ -212,9 +241,8 @@ class CategoricalAxis(Axis):
             + f"Categories: {', '.join(self.points)}"
         )
 
-    def __eq__(self, value: str, /) -> np.ndarray[Literal[1], np.dtype[np.bool_]]:
+    def _compare_points(
+        self, value: object
+    ) -> np.ndarray[Literal[1], np.dtype[np.bool_]]:
         points: np.ndarray[Literal[1], np.dtype[Number | np.str_]] = self.points
         return np.equal(points, value)
-
-    def __hash__(self) -> int:
-        return hash(self.points)
