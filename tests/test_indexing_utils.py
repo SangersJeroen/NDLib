@@ -40,7 +40,9 @@ class TestSimpleInequalities:
     def test_masks(self, expr, expected):
         np.testing.assert_array_equal(_mask(expr), np.array(expected, dtype=bool))
 
-    @pytest.mark.parametrize(("expr", "expected"), [(">0", [3, 4, 5]), ("<=-2", [0, 1])])
+    @pytest.mark.parametrize(
+        ("expr", "expected"), [(">0", [3, 4, 5]), ("<=-2", [0, 1])]
+    )
     def test_axis_name_may_be_left_out(self, expr, expected):
         np.testing.assert_array_equal(np.nonzero(_mask(expr))[0], expected)
 
@@ -85,11 +87,15 @@ class TestCompoundInequalities:
 
 class TestInequalityErrors:
     def test_wrong_variable_name(self):
-        with pytest.raises(ValueError, match="Variable 'y' in expression doesn't match"):
+        with pytest.raises(
+            ValueError, match="Variable 'y' in expression doesn't match"
+        ):
             _mask("y>1")
 
     def test_wrong_variable_name_in_compound(self):
-        with pytest.raises(ValueError, match="Variable 'y' in expression doesn't match"):
+        with pytest.raises(
+            ValueError, match="Variable 'y' in expression doesn't match"
+        ):
             _mask("1<y<3")
 
     def test_single_equals_is_rejected(self):
@@ -159,7 +165,9 @@ class TestCategorical:
         assert parse_categorical_to_query("c", "==dog") == "`c` == 'dog'"
 
     def test_wrong_variable_name(self):
-        with pytest.raises(ValueError, match="Variable 'd' in expression doesn't match"):
+        with pytest.raises(
+            ValueError, match="Variable 'd' in expression doesn't match"
+        ):
             parse_categorical_to_mask("c", "d==dog", CATEGORIES)
         with pytest.raises(ValueError, match="doesn't match"):
             parse_categorical_to_query("c", "d==dog")

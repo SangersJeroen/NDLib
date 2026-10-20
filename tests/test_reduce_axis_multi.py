@@ -105,12 +105,14 @@ class TestDataBlockReduceAxis:
 
 def _ensemble(*, as_pandas=False) -> Ensemble:
     a, b, c = np.meshgrid(np.arange(4.0), np.arange(3.0), np.arange(2.0), indexing="ij")
-    df = pd.DataFrame({
-        "a": a.ravel(),
-        "b": b.ravel(),
-        "c": c.ravel(),
-        "v": a.ravel() + 10 * b.ravel() + 100 * c.ravel(),
-    })
+    df = pd.DataFrame(
+        {
+            "a": a.ravel(),
+            "b": b.ravel(),
+            "c": c.ravel(),
+            "v": a.ravel() + 10 * b.ravel() + 100 * c.ravel(),
+        }
+    )
     axes = [
         SignalAxis(np.arange(4.0), "a", 0, "nm", navigate=True),
         SignalAxis(np.arange(3.0), "b", 1, "nm", navigate=True),

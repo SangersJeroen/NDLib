@@ -153,6 +153,7 @@ class SignalAxis(Axis):
             + f"{self.min:.2f} {self.unit} <--------step: {self.scale:.2f} {self.unit}--------> {self.max:.2f} {self.unit}"
         )
 
+
 class UnorderedSignalAxis(Axis):
     """[TODO:description]
 

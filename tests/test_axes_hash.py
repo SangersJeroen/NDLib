@@ -83,7 +83,9 @@ class TestEqualityBetweenAxes:
         assert base != _signal(unit="um")
 
     def test_different_types_are_unequal(self):
-        assert _signal(points=(1.0, 2.0, 5.0)) != _unordered(points=(1.0, 2.0, 5.0), name="x", unit="nm")
+        assert _signal(points=(1.0, 2.0, 5.0)) != _unordered(
+            points=(1.0, 2.0, 5.0), name="x", unit="nm"
+        )
 
     def test_unordered_axes(self):
         assert _unordered() == _unordered()
@@ -99,7 +101,9 @@ class TestElementwiseComparisonIsUnchanged:
         axis = _signal()
 
         np.testing.assert_array_equal(axis == 1.0, [False, True, False])
-        np.testing.assert_array_equal(axis == np.array([0.0, 5.0, 2.0]), [True, False, True])
+        np.testing.assert_array_equal(
+            axis == np.array([0.0, 5.0, 2.0]), [True, False, True]
+        )
         np.testing.assert_array_equal(axis > 0.5, [False, True, True])
         np.testing.assert_array_equal(axis <= 1.0, [True, True, False])
 

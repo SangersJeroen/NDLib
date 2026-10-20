@@ -11,7 +11,9 @@ import numpy as np
 import pytest
 
 # Add the parent directory to the path to import eels_base
-sys.path.insert(0, pathlib.Path(pathlib.Path(pathlib.Path(__file__).resolve()).parent).parent)
+sys.path.insert(
+    0, pathlib.Path(pathlib.Path(pathlib.Path(__file__).resolve()).parent).parent
+)
 
 from NDLib.AxesStructures import CategoricalAxis, SignalAxis, UnorderedSignalAxis
 from NDLib.BaseStructures import DataBlock
@@ -300,18 +302,20 @@ class TestDataBlockGetMethod:
         ]
         db = DataBlock(data, axes)
 
-        mask = np.array([
-            True,
-            False,
-            True,
-            False,
-            True,
-            False,
-            True,
-            False,
-            True,
-            False,
-        ])
+        mask = np.array(
+            [
+                True,
+                False,
+                True,
+                False,
+                True,
+                False,
+                True,
+                False,
+                True,
+                False,
+            ]
+        )
         result = db.get({"x": mask})
         assert result.axes[0].size == 5
 
@@ -544,7 +548,10 @@ class TestDataBlockRebinAndReduce:
         """The reduced block describes the same quantity as the original"""
         axes = [SignalAxis(np.arange(10) * 1.0, "x", 0, "nm", navigate=True)]
         db = DataBlock(
-            da.from_array(np.arange(10.0), chunks=5), axes, quantity="intensity", unit="counts"
+            da.from_array(np.arange(10.0), chunks=5),
+            axes,
+            quantity="intensity",
+            unit="counts",
         )
 
         result = db.rebin_reduce_axis("x", new_binsize=3.0)
@@ -840,7 +847,7 @@ class TestDataBlockSplitWithDatablock:
             assert block.shape == (2, 3, 4)
             assert [ax.name for ax in block.axes] == ["a", "b", "c"]
             assert (block.quantity, block.unit) == ("signal", "counts")
-            expected = np.where((self.MASK == uval)[:, :, None], self.RAW, np.nan)
+            expected = np.where((uval == self.MASK)[:, :, None], self.RAW, np.nan)
             np.testing.assert_array_equal(block.compute(), expected)
 
     def test_mask_over_subset_of_axes_is_broadcast(self):
@@ -865,7 +872,7 @@ class TestDataBlockSplitWithDatablock:
             assert block.axes[1].unit == "#"
             np.testing.assert_array_equal(block.axes[1].points, [0, 1, 2])
             assert (block.quantity, block.unit) == ("signal", "counts")
-            a_idx, b_idx = np.nonzero(self.MASK == uval)
+            a_idx, b_idx = np.nonzero(uval == self.MASK)
             # Column r holds the full c-profile of the r-th matching (a, b) cell
             expected = np.stack([self.RAW[a, b] for a, b in zip(a_idx, b_idx)], axis=1)
             np.testing.assert_array_equal(block.compute(), expected)

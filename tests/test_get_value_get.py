@@ -53,9 +53,7 @@ class TestDataBlockGet:
     def test_shorthand_and_scientific_notation(self):
         result = _block().get({"x": ">1e0", "u": "<=.5e1"})
 
-        np.testing.assert_array_equal(
-            result.compute(), RAW[2:, U_POINTS <= 5]
-        )
+        np.testing.assert_array_equal(result.compute(), RAW[2:, U_POINTS <= 5])
 
     def test_numeric_equality_and_inequality(self):
         eq = _block().get({"u": "u==3"})
@@ -181,12 +179,14 @@ class TestDataBlockValueGet:
 
 def _ensemble(*, as_pandas=False) -> Ensemble:
     x, u, p = np.meshgrid(np.arange(4.0), U_POINTS, np.arange(3), indexing="ij")
-    df = pd.DataFrame({
-        "x": x.ravel(),
-        "u": u.ravel(),
-        "param": np.array(CATS)[p.ravel()],
-        "v": np.arange(x.size, dtype=float),
-    })
+    df = pd.DataFrame(
+        {
+            "x": x.ravel(),
+            "u": u.ravel(),
+            "param": np.array(CATS)[p.ravel()],
+            "v": np.arange(x.size, dtype=float),
+        }
+    )
     # Shuffle the rows so the order of appearance differs from the axis order
     df = df.sample(frac=1.0, random_state=0).reset_index(drop=True)
     axes = [

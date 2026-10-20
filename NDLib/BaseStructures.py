@@ -54,7 +54,9 @@ def _selector_to_mask(axis: AxisLike, selector: object) -> np.ndarray:
             f"Selector for axis '{axis.name}' must be an expression string or a boolean "
             f"array, got {type(selector)}"
         )
-    mask = selector.compute() if isinstance(selector, da.Array) else np.asarray(selector)
+    mask = (
+        selector.compute() if isinstance(selector, da.Array) else np.asarray(selector)
+    )
     if mask.ndim != 1:
         raise ValueError(
             f"Mask for axis '{axis.name}' should be 1-D, got {mask.ndim} dimensions"
@@ -467,7 +469,11 @@ class DataBlock:
         raise RuntimeError(f"{self} does not have axis {axis_name}")
 
     def _binary_op(
-        self, other: "DataBlock | Number | np.ndarray", operation: Callable, *, reflected: bool = False
+        self,
+        other: "DataBlock | Number | np.ndarray",
+        operation: Callable,
+        *,
+        reflected: bool = False,
     ) -> Self:
         """Applies `operation(self, other)`, or `operation(other, self)` when
         `reflected`, elementwise. `other` is a scalar, an array that broadcasts
@@ -518,9 +524,7 @@ class DataBlock:
         return self._binary_op(other, operator.pow)
 
     def __neg__(self):
-        return type(self)(
-            -self.data, deepcopy(self.axes), self.quantity, self.unit
-        )
+        return type(self)(-self.data, deepcopy(self.axes), self.quantity, self.unit)
 
     def crop_axis(self, axis_name: str, min: float, max: float) -> Self:
         if not self.has_axis(axis_name):
@@ -735,7 +739,9 @@ class DataBlock:
             RuntimeError: If an axis is unknown.
             ValueError: If no axis is given or an axis is given twice.
         """
-        names: list[str] = [axis_name] if isinstance(axis_name, str) else list(axis_name)
+        names: list[str] = (
+            [axis_name] if isinstance(axis_name, str) else list(axis_name)
+        )
         if not names:
             raise ValueError("Give at least one axis to reduce")
         if len(set(names)) != len(names):
@@ -762,9 +768,7 @@ class DataBlock:
 
         return type(self)(new_data, new_axes, quantity=out_quantity, unit=out_unit)
 
-    def _select(
-        self, indexing: dict
-    ) -> tuple[da.Array | np.ndarray, list[AxisLike]]:
+    def _select(self, indexing: dict) -> tuple[da.Array | np.ndarray, list[AxisLike]]:
         """Data and (new) axes after applying the selectors in `indexing`."""
         if not isinstance(indexing, dict):
             raise TypeError(f"Expected dict, got {type(indexing)}")
@@ -1151,8 +1155,7 @@ class Ensemble:
             new_axes.append(new_axis)
         axes: list[SignalAxis | CategoricalAxis] = new_axes
         coord_block: da.Array = (
-            da
-            .stack([mgrid[i].flatten() for i in range(len(axes))] + [data])
+            da.stack([mgrid[i].flatten() for i in range(len(axes))] + [data])
             .rechunk({0: -1, 1: "auto"}, block_size_limit=1e8)
             .T
         )
@@ -1244,7 +1247,9 @@ class Ensemble:
             ValueError: If no axis is given, an axis is given twice, all axes
                 are reduced or `out_quantity` is the name of a remaining axis.
         """
-        names: list[str] = [axis_name] if isinstance(axis_name, str) else list(axis_name)
+        names: list[str] = (
+            [axis_name] if isinstance(axis_name, str) else list(axis_name)
+        )
         if not names:
             raise ValueError("Give at least one axis to reduce")
         if len(set(names)) != len(names):
@@ -1264,8 +1269,7 @@ class Ensemble:
             raise ValueError(f"out_quantity '{out_quantity}' is the name of an axis")
 
         new_view = (
-            self.data
-            .groupby(sort_axes, observed=True)[self.quantity]
+            self.data.groupby(sort_axes, observed=True)[self.quantity]
             .agg(reducer)
             .reset_index()
             .rename(columns={self.quantity: out_quantity})
@@ -1297,15 +1301,16 @@ class Ensemble:
         sort_axes = [axis.name for axis in self.axes] + [rebin_axis]
         sort_axes.remove(relevant_axis.name)
 
-        new_view = self.data.assign(**{
-            rebin_axis: self.data[relevant_axis.name].map_partitions(
-                pd.cut, bins=bin_edges, include_lowest=True, labels=False
-            )
-        })
+        new_view = self.data.assign(
+            **{
+                rebin_axis: self.data[relevant_axis.name].map_partitions(
+                    pd.cut, bins=bin_edges, include_lowest=True, labels=False
+                )
+            }
+        )
         new_view = new_view.dropna()
         new_view = (
-            new_view
-            .groupby(sort_axes, observed=True)[self.quantity]
+            new_view.groupby(sort_axes, observed=True)[self.quantity]
             .agg(list, meta=(self.quantity, "float64"))
             .reset_index()
         )
@@ -1331,9 +1336,7 @@ class Ensemble:
 
         return type(self)(new_view, new_axes, self.quantity, self.unit)
 
-    def pool(
-        self, bin_sizes: dict[str, Number], reducer: Callable = np.mean
-    ) -> Self:
+    def pool(self, bin_sizes: dict[str, Number], reducer: Callable = np.mean) -> Self:
         """Pools several axes at once, for example `pool({"x": 3.0, "y": 3.0})`.
 
         An Ensemble has no regular sample grid, so unlike `DataBlock.pool` the sizes
@@ -1383,21 +1386,25 @@ class Ensemble:
 
         if isinstance(self.data, dd.DataFrame):
             self.data: dd.DataFrame
-            new_view = self.data.assign(**{
-                rebin_axis: self.data[relevant_axis.name].map_partitions(
-                    pd.cut, bins=bin_edges, include_lowest=True, labels=False
-                )
-            })
+            new_view = self.data.assign(
+                **{
+                    rebin_axis: self.data[relevant_axis.name].map_partitions(
+                        pd.cut, bins=bin_edges, include_lowest=True, labels=False
+                    )
+                }
+            )
         else:
             self.data: pd.DataFrame
-            new_view = self.data.assign(**{
-                rebin_axis: pd.cut(
-                    self.data[relevant_axis.name],
-                    bins=bin_edges,
-                    include_lowest=True,
-                    labels=False,
-                )
-            })
+            new_view = self.data.assign(
+                **{
+                    rebin_axis: pd.cut(
+                        self.data[relevant_axis.name],
+                        bins=bin_edges,
+                        include_lowest=True,
+                        labels=False,
+                    )
+                }
+            )
 
         new_view = new_view.dropna()
 
@@ -1469,11 +1476,13 @@ class Ensemble:
         rebin_axis = relevant_axis.name + "_bin"
 
         # Assign bin indices
-        new_view = self.data.assign(**{
-            rebin_axis: self.data[relevant_axis.name].map_partitions(
-                pd.cut, bins=bin_edges, include_lowest=True, labels=False
-            )
-        }).dropna()
+        new_view = self.data.assign(
+            **{
+                rebin_axis: self.data[relevant_axis.name].map_partitions(
+                    pd.cut, bins=bin_edges, include_lowest=True, labels=False
+                )
+            }
+        ).dropna()
 
         mapping = dict(enumerate(bin_centers))
 
@@ -1583,7 +1592,7 @@ class Ensemble:
             new_part[other.quantity] = operation(
                 new_part[other.quantity], new_part[other.quantity + "_other"]
             )
-            new_part.drop(columns=other.quantity + '_other')
+            new_part.drop(columns=other.quantity + "_other")
             return new_part
 
         new_data = self_data.map_partitions(_function, other_data, operation)

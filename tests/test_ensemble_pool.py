@@ -10,23 +10,33 @@ from NDLib.BaseStructures import Ensemble
 
 
 def _ensemble() -> Ensemble:
-    x, y, rep = np.meshgrid(np.arange(10.0), np.arange(8.0), np.arange(2.0), indexing="ij")
-    df = pd.DataFrame({
-        "x": x.ravel(),
-        "y": y.ravel(),
-        "repetition": rep.ravel(),
-        "v": x.ravel() + 10 * y.ravel() + 100 * rep.ravel(),
-    })
+    x, y, rep = np.meshgrid(
+        np.arange(10.0), np.arange(8.0), np.arange(2.0), indexing="ij"
+    )
+    df = pd.DataFrame(
+        {
+            "x": x.ravel(),
+            "y": y.ravel(),
+            "repetition": rep.ravel(),
+            "v": x.ravel() + 10 * y.ravel() + 100 * rep.ravel(),
+        }
+    )
     axes = [
         SignalAxis(np.arange(10.0), "x", 0, "nm", navigate=True),
         SignalAxis(np.arange(8.0), "y", 1, "nm", navigate=True),
         SignalAxis(np.arange(2.0), "repetition", 2, "#"),
     ]
-    return Ensemble(dd.from_pandas(df, npartitions=3), axes, quantity="v", unit="counts")
+    return Ensemble(
+        dd.from_pandas(df, npartitions=3), axes, quantity="v", unit="counts"
+    )
 
 
 def _frame(ensemble: Ensemble) -> pd.DataFrame:
-    return ensemble.data.compute().sort_values(["x", "y", "repetition"]).reset_index(drop=True)
+    return (
+        ensemble.data.compute()
+        .sort_values(["x", "y", "repetition"])
+        .reset_index(drop=True)
+    )
 
 
 class TestEnsemblePool:

@@ -24,7 +24,9 @@ def _block_means(raw: np.ndarray, size: int, axis: int) -> np.ndarray:
     """Reference: mean over consecutive windows of `size`, trimming the remainder"""
     n = raw.shape[axis] // size * size
     moved = np.moveaxis(raw, axis, 0)[:n]
-    return np.moveaxis(moved.reshape(n // size, size, *moved.shape[1:]).mean(axis=1), 0, axis)
+    return np.moveaxis(
+        moved.reshape(n // size, size, *moved.shape[1:]).mean(axis=1), 0, axis
+    )
 
 
 class TestPoolValues:

@@ -13,7 +13,9 @@ import pandas as pd
 import pytest
 
 # Add the parent directory to the path to import eels_base
-sys.path.insert(0, pathlib.Path(pathlib.Path(pathlib.Path(__file__).resolve()).parent).parent)
+sys.path.insert(
+    0, pathlib.Path(pathlib.Path(pathlib.Path(__file__).resolve()).parent).parent
+)
 
 from NDLib.AxesStructures import CategoricalAxis, SignalAxis, UnorderedSignalAxis
 from NDLib.BaseStructures import DataBlock, Ensemble
@@ -59,7 +61,9 @@ class TestDataBlockSerialization:
         """Create a DataBlock with categorical axis"""
         data = da.from_array(np.random.rand(3, 10), chunks=(3, 5))
         axes = [
-            CategoricalAxis(["alpha", "beta", "gamma"], "category", 0, "-", navigate=False),
+            CategoricalAxis(
+                ["alpha", "beta", "gamma"], "category", 0, "-", navigate=False
+            ),
             SignalAxis(np.arange(10), "x", 1, "nm", navigate=True),
         ]
         return DataBlock(data, axes, quantity="value", unit="V")
@@ -121,7 +125,9 @@ class TestDataBlockSerialization:
 
         loaded_db = DataBlock.load(filepath)
 
-        for orig_axis, loaded_axis in zip(simple_datablock.axes, loaded_db.axes, strict=False):
+        for orig_axis, loaded_axis in zip(
+            simple_datablock.axes, loaded_db.axes, strict=False
+        ):
             assert orig_axis.name == loaded_axis.name
             assert orig_axis.index_in_array == loaded_axis.index_in_array
             assert orig_axis.unit == loaded_axis.unit
@@ -242,11 +248,13 @@ class TestEnsembleSerialization:
         y_vals = np.array([0.5, 1.0, 1.5, 2.0, 2.5])
         intensity = np.array([10.0, 15.0, 20.0, 25.0, 30.0])
 
-        df = pd.DataFrame({
-            "x": x_vals,
-            "y": y_vals,
-            "intensity": intensity,
-        })
+        df = pd.DataFrame(
+            {
+                "x": x_vals,
+                "y": y_vals,
+                "intensity": intensity,
+            }
+        )
         ddf = dd.from_pandas(df, npartitions=2)
 
         axes = [
@@ -267,11 +275,13 @@ class TestEnsembleSerialization:
         y_vals = np.random.uniform(0, 10, n_points)
         signal = np.random.rand(n_points) * 100
 
-        df = pd.DataFrame({
-            "x": x_vals,
-            "y": y_vals,
-            "signal": signal,
-        })
+        df = pd.DataFrame(
+            {
+                "x": x_vals,
+                "y": y_vals,
+                "signal": signal,
+            }
+        )
         ddf = dd.from_pandas(df, npartitions=4)
 
         axes = [
@@ -316,8 +326,7 @@ class TestEnsembleSerialization:
         # Compare actual data values
         pd.testing.assert_frame_equal(
             loaded_ens.data.compute().sort_values(by=["x", "y"]).reset_index(drop=True),
-            simple_ensemble.data
-            .compute()
+            simple_ensemble.data.compute()
             .sort_values(by=["x", "y"])
             .reset_index(drop=True),
         )
@@ -340,7 +349,9 @@ class TestEnsembleSerialization:
 
         loaded_ens = Ensemble.load(filepath)
 
-        for orig_axis, loaded_axis in zip(simple_ensemble.axes, loaded_ens.axes, strict=False):
+        for orig_axis, loaded_axis in zip(
+            simple_ensemble.axes, loaded_ens.axes, strict=False
+        ):
             assert orig_axis.name == loaded_axis.name
             assert orig_axis.index_in_array == loaded_axis.index_in_array
             assert orig_axis.unit == loaded_axis.unit
@@ -364,8 +375,7 @@ class TestEnsembleSerialization:
 
         # Compare data
         orig_df = (
-            complex_ensemble.data
-            .compute()
+            complex_ensemble.data.compute()
             .sort_values(by=["x", "y"])
             .reset_index(drop=True)
         )
@@ -384,11 +394,13 @@ class TestEnsembleSerialization:
         y_vals = np.random.uniform(0, 100, n_points)
         data_vals = np.random.rand(n_points)
 
-        df = pd.DataFrame({
-            "x": x_vals,
-            "y": y_vals,
-            "data": data_vals,
-        })
+        df = pd.DataFrame(
+            {
+                "x": x_vals,
+                "y": y_vals,
+                "data": data_vals,
+            }
+        )
         ddf = dd.from_pandas(df, npartitions=10)
 
         axes = [
@@ -422,11 +434,13 @@ class TestEnsembleSerialization:
         simple_ensemble.save(filepath)
 
         # Create different ensemble
-        df = pd.DataFrame({
-            "a": [1, 2, 3],
-            "b": [4, 5, 6],
-            "new_qty": [7, 8, 9],
-        })
+        df = pd.DataFrame(
+            {
+                "a": [1, 2, 3],
+                "b": [4, 5, 6],
+                "new_qty": [7, 8, 9],
+            }
+        )
         ddf = dd.from_pandas(df, npartitions=1)
         axes = [
             SignalAxis(np.array([1, 2, 3]), "a", 0, "-", navigate=True),
@@ -487,11 +501,13 @@ class TestRoundTripConsistency:
     def test_ensemble_multiple_roundtrips(self, temp_dir):
         """Test that Ensemble survives multiple save/load cycles"""
         # Create initial Ensemble
-        df = pd.DataFrame({
-            "x": [1.0, 2.0, 3.0],
-            "y": [4.0, 5.0, 6.0],
-            "val": [7.0, 8.0, 9.0],
-        })
+        df = pd.DataFrame(
+            {
+                "x": [1.0, 2.0, 3.0],
+                "y": [4.0, 5.0, 6.0],
+                "val": [7.0, 8.0, 9.0],
+            }
+        )
         ddf = dd.from_pandas(df, npartitions=1)
         axes = [
             SignalAxis(np.array([1.0, 2.0, 3.0]), "x", 0, "nm", navigate=True),
