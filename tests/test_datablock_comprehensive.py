@@ -652,7 +652,7 @@ class TestDataBlockRebinAndReduce:
 
 
 class TestDataBlockReorderAxis:
-    """reorder_axis: move one axis to a new dimension, in place"""
+    """reorder_axis_inplace: move one axis to a new dimension, in place"""
 
     RAW = np.arange(24, dtype=float).reshape(2, 3, 4)
 
@@ -678,7 +678,7 @@ class TestDataBlockReorderAxis:
     def test_moves_axis_and_data(self, axis_name, target, names, source):
         db = self._block()
 
-        db.reorder_axis(axis_name, target)
+        db.reorder_axis_inplace(axis_name, target)
 
         assert [ax.name for ax in db.axes] == names
         assert [ax.index_in_array for ax in db.axes] == [0, 1, 2]
@@ -691,7 +691,7 @@ class TestDataBlockReorderAxis:
     def test_axis_points_follow_their_data(self):
         db = self._block()
 
-        db.reorder_axis("c", 0)
+        db.reorder_axis_inplace("c", 0)
 
         np.testing.assert_array_equal(db.axis_p("c"), np.arange(4))
         assert db.axis_obj("c").index_in_array == 0
@@ -700,7 +700,7 @@ class TestDataBlockReorderAxis:
     def test_same_position_is_a_noop(self):
         db = self._block()
 
-        db.reorder_axis("b", 1)
+        db.reorder_axis_inplace("b", 1)
 
         assert [ax.name for ax in db.axes] == ["a", "b", "c"]
         np.testing.assert_array_equal(db.compute(), self.RAW)
@@ -708,7 +708,7 @@ class TestDataBlockReorderAxis:
     def test_stays_lazy_for_dask_data(self):
         db = self._block()
 
-        db.reorder_axis("c", 0)
+        db.reorder_axis_inplace("c", 0)
 
         assert isinstance(db.data, da.Array)
         assert not db._computed
@@ -716,7 +716,7 @@ class TestDataBlockReorderAxis:
     def test_computed_data_stays_a_numpy_array(self):
         db = self._block(computed=True)
 
-        db.reorder_axis("c", 0)
+        db.reorder_axis_inplace("c", 0)
 
         assert isinstance(db.data, np.ndarray)
         assert isinstance(db.compute(), np.ndarray)
@@ -724,14 +724,14 @@ class TestDataBlockReorderAxis:
 
     def test_unknown_axis(self):
         with pytest.raises(RuntimeError, match="no axis: z"):
-            self._block().reorder_axis("z", 0)
+            self._block().reorder_axis_inplace("z", 0)
 
     @pytest.mark.parametrize("target", [3, -4, 10])
     def test_target_out_of_range_leaves_block_untouched(self, target):
         db = self._block()
 
         with pytest.raises(ValueError, match="out of range"):
-            db.reorder_axis("a", target)
+            db.reorder_axis_inplace("a", target)
 
         assert [ax.name for ax in db.axes] == ["a", "b", "c"]
         np.testing.assert_array_equal(db.compute(), self.RAW)

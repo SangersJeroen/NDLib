@@ -157,10 +157,55 @@ class DataBlock:
     def c_op(self, axis, operation) -> Self:
         raise NotImplementedError()
 
-    def reorder_axis(self, axis_name: str, target_index: int) -> None:
+    def _moved(
+        self, axis_name: str, target_index: int
+    ) -> tuple[list[AxisLike], da.Array | np.ndarray]:
+        """Axes (deep copies) and data with `axis_name` moved to `target_index`,
+        without modifying this datablock. Validates the arguments."""
+        if not self.has_axis(axis_name):
+            raise RuntimeError(f"{self} has no axis: {axis_name}")
+        if not -self.dims <= target_index < self.dims:
+            raise ValueError(
+                f"target_index {target_index} out of range for {self.dims} dimensions"
+            )
+
+        target_index %= self.dims
+        old_index = self.axis_obj(axis_name).index_in_array
+
+        new_axes = deepcopy(self.axes)
+        new_axes.insert(target_index, new_axes.pop(old_index))
+        for i, axis in enumerate(new_axes):
+            axis.index_in_array = i
+
+        array_module = np if isinstance(self.data, np.ndarray) else da
+        return new_axes, array_module.moveaxis(self.data, old_index, target_index)
+
+    def reorder_axis(self, axis_name: str, target_index: int) -> Self:
         """
-        Moves axis `axis_name` to dimension `target_index` (in place), shifting the
-        axes in between, like `np.moveaxis`. Both axes and data are reordered.
+        Returns a new datablock in which axis `axis_name` is moved to dimension
+        `target_index`, shifting the axes in between, like `np.moveaxis`. Both axes
+        and data are reordered; this datablock is not modified.
+        See `reorder_axis_inplace` to reorder this datablock itself.
+
+        Args:
+            axis_name: str, name of axis to reorder
+            target_index: int, dimensional position to move axis to, negative
+                values count from the last dimension
+
+        Returns:
+            DataBlock; datablock with the reordered axes, same quantity and unit
+
+        Raises:
+            RuntimeError: If axis with `axis_name` not known.
+            ValueError: If `target_index` is outside the dimensions of the datablock.
+        """
+        new_axes, new_data = self._moved(axis_name, target_index)
+        return type(self)(new_data, new_axes, self.quantity, self.unit)
+
+    def reorder_axis_inplace(self, axis_name: str, target_index: int) -> None:
+        """
+        Moves axis `axis_name` to dimension `target_index` of this datablock itself,
+        see `reorder_axis` for the semantics and a version that returns a new block.
         Will call `__post_init_db__` to verify data shape and axes match.
 
         Args:
@@ -172,26 +217,7 @@ class DataBlock:
             RuntimeError: If axis with `axis_name` not known.
             ValueError: If `target_index` is outside the dimensions of the datablock.
         """
-        if not self.has_axis(axis_name):
-            raise RuntimeError(f"{self} has no axis: {axis_name}")
-        if not -self.dims <= target_index < self.dims:
-            raise ValueError(
-                f"target_index {target_index} out of range for {self.dims} dimensions"
-            )
-
-        target_index %= self.dims
-        old_index = self.axis_obj(axis_name).index_in_array
-        if old_index == target_index:
-            return
-
-        new_axes = deepcopy(self.axes)
-        new_axes.insert(target_index, new_axes.pop(old_index))
-        for i, axis in enumerate(new_axes):
-            axis.index_in_array = i
-
-        array_module = np if isinstance(self.data, np.ndarray) else da
-        self.axes = new_axes
-        self.data = array_module.moveaxis(self.data, old_index, target_index)
+        self.axes, self.data = self._moved(axis_name, target_index)
         self.__post_init_db__()
 
     def compute(self) -> np.ndarray:
