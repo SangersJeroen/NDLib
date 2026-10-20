@@ -539,6 +539,38 @@ class TestDataBlockRebinAndReduce:
         np.testing.assert_allclose(result.compute(), expected)
         np.testing.assert_allclose(result.axes[0].points, [3.99995, 7.00005])
 
+    def test_rebin_reduce_axis_keeps_quantity_and_unit(self):
+        """The reduced block describes the same quantity as the original"""
+        axes = [SignalAxis(np.arange(10) * 1.0, "x", 0, "nm", navigate=True)]
+        db = DataBlock(
+            da.from_array(np.arange(10.0), chunks=5), axes, quantity="intensity", unit="counts"
+        )
+
+        result = db.rebin_reduce_axis("x", new_binsize=3.0)
+
+        assert result.quantity == "intensity"
+        assert result.unit == "counts"
+
+    @pytest.mark.parametrize(
+        "edges",
+        [
+            np.array([2.5, 5.5, 8.5]),
+            np.array([2.5, 5.5, 8.5]).tolist(),
+            tuple(np.array([2.5, 5.5, 8.5]).tolist()),
+        ],
+        ids=["array", "list", "tuple"],
+    )
+    def test_rebin_reduce_axis_does_not_modify_bin_edges(self, edges):
+        """Explicit edges may be a sequence, are not padded in place, and can be reused"""
+        db, _ = self._grid_datablock()
+        before = np.array(edges, dtype=float)
+
+        first = db.rebin_reduce_axis("x", bin_edges=edges)
+        second = db.rebin_reduce_axis("x", bin_edges=edges)
+
+        np.testing.assert_array_equal(np.asarray(edges, dtype=float), before)
+        np.testing.assert_array_equal(first.axes[0].points, second.axes[0].points)
+
     def test_rebin_reduce_axis_needs_binsize_or_edges(self):
         """Neither new_binsize nor bin_edges is an error"""
         db, _ = self._grid_datablock()

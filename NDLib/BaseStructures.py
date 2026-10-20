@@ -50,6 +50,9 @@ def compute_binning(
 
         num_bins = int(np.floor((axis.max - axis.min) / bin_size))
         bin_edges: Axis1D = np.linspace(axis.min - eps, axis.max + eps, num_bins + 1)
+    else:
+        # Work on a float copy: the padding below must not modify the caller's edges
+        bin_edges = np.array(bin_edges, dtype=float)
 
     # 'Safety' padding has proven to be necessary
     bin_edges[0] -= eps
@@ -477,7 +480,7 @@ class DataBlock:
         )
         new_axes = deepcopy(self.axes)
         new_axes[relevant_axis.index_in_array] = new_axis
-        return type(self)(new_view, new_axes)
+        return type(self)(new_view, new_axes, self.quantity, self.unit)
 
     def reduce_axis(
         self,
@@ -1108,7 +1111,7 @@ class Ensemble:
         axis_name: str,
         new_binsize: Number | None = None,
         bin_edges: Axis1D | None = None,
-        reducer: Callable = da.mean,
+        reducer: Callable = np.mean,
     ) -> Self:
         if not self.has_axis(axis_name):
             raise RuntimeError(f"{self} has no axis {axis_name}")

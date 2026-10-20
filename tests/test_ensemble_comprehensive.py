@@ -671,6 +671,16 @@ class TestEnsembleRebinReduceAxisCoverage:
         np.testing.assert_allclose(result.axes[0].points, _BINSIZE3_CENTERS)
         assert "x_bin" not in frame.columns
 
+    def test_rebin_reduce_axis_default_reducer_is_mean(self):
+        df = pd.DataFrame({"x": np.arange(10) * 1.0, "v": np.arange(10) * 10.0})
+        axes = [SignalAxis(np.arange(10) * 1.0, "x", 0, "nm", navigate=True)]
+        ensemble = Ensemble(dd.from_pandas(df, npartitions=3), axes, quantity="v")
+
+        result = ensemble.rebin_reduce_axis("x", new_binsize=3.0)
+
+        frame = _frame(result).sort_values("x")
+        np.testing.assert_allclose(frame["v"], [10.0, 45.0, 80.0])
+
     def test_rebin_reduce_axis_keeps_other_axes(self):
         result = _xy_ensemble().rebin_reduce_axis("x", new_binsize=3.0, reducer=np.sum)
 
@@ -712,6 +722,43 @@ class TestEnsembleRebinReduceAxisCoverage:
     def test_rebin_reduce_axis_categorical_axis(self):
         with pytest.raises(RuntimeError, match="CategoricalAxis"):
             _categorical_ensemble().rebin_reduce_axis("cat", new_binsize=1.0)
+
+
+class TestBinEdgesAreNotModified:
+    """Explicit bin edges belong to the caller: no in-place padding, any sequence works"""
+
+    EDGES = [0.0, 4.0, 9.0]
+
+    @pytest.mark.parametrize("method", ["rebin_axis", "rebin_reduce_axis", "rebin_to_new_axis"])
+    @pytest.mark.parametrize(
+        "make_edges",
+        [
+            lambda: np.array([0.0, 4.0, 9.0]),
+            lambda: [0.0, 4.0, 9.0],
+            lambda: (0.0, 4.0, 9.0),
+            lambda: np.array([0, 4, 9]),
+        ],
+        ids=["float-array", "list", "tuple", "int-array"],
+    )
+    def test_edges_unchanged_and_result_stable(self, method, make_edges):
+        ensemble = _xy_ensemble()
+        edges = make_edges()
+        snapshot = np.array(edges, dtype=float)
+
+        first = getattr(ensemble, method)("x", bin_edges=edges)
+        second = getattr(ensemble, method)("x", bin_edges=edges)
+
+        np.testing.assert_array_equal(np.asarray(edges, dtype=float), snapshot)
+        np.testing.assert_allclose(first.axes[0].points, _EDGES_CENTERS)
+        np.testing.assert_allclose(second.axes[0].points, _EDGES_CENTERS)
+
+    def test_read_only_edges(self):
+        edges = np.array([0.0, 4.0, 9.0])
+        edges.setflags(write=False)
+
+        result = _xy_ensemble().rebin_axis("x", bin_edges=edges)
+
+        np.testing.assert_allclose(result.axes[0].points, _EDGES_CENTERS)
 
 
 class TestEnsembleRebinToNewAxisCoverage:
