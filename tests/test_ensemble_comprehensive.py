@@ -761,6 +761,119 @@ class TestBinEdgesAreNotModified:
         np.testing.assert_allclose(result.axes[0].points, _EDGES_CENTERS)
 
 
+class TestEnsembleSplitWithEnsemble:
+    """split_with_ensemble: split an ensemble by the quantity of another one"""
+
+    @staticmethod
+    def _data(*, as_pandas=False, extra=None) -> Ensemble:
+        df = pd.DataFrame({
+            "x": [0.0, 1.0, 2.0, 3.0] * 2,
+            "y": [0.0] * 4 + [1.0] * 4,
+            "v": np.arange(8.0),
+        })
+        axes = [
+            SignalAxis(np.arange(4) * 1.0, "x", 0, "nm", navigate=True),
+            SignalAxis(np.array([0.0, 1.0]), "y", 1, "um", navigate=True),
+        ]
+        if extra is not None:
+            df, axes = extra(df, axes)
+        data = df if as_pandas else dd.from_pandas(df, npartitions=2)
+        return Ensemble(data, axes, quantity="v", unit="counts")
+
+    @staticmethod
+    def _mask(xs=(0.0, 1.0, 2.0, 3.0), values=(0, 1, 0, 1), *, as_pandas=False):
+        df = pd.DataFrame({"x": list(xs), "m": list(values)})
+        axes = [SignalAxis(np.array(xs), "x", 0, "nm", navigate=True)]
+        data = df if as_pandas else dd.from_pandas(df, npartitions=1)
+        return Ensemble(data, axes, quantity="m")
+
+    @pytest.mark.parametrize("as_pandas", [False, True])
+    @pytest.mark.parametrize("drop_axes", ["x", ["x"]])
+    def test_split_drops_axis_and_filters_rows(self, as_pandas, drop_axes):
+        result = self._data(as_pandas=as_pandas).split_with_ensemble(
+            self._mask(as_pandas=as_pandas), drop_axes
+        )
+
+        assert len(result) == 2
+        for ensemble, rows in zip(result, [[0, 2, 4, 6], [1, 3, 5, 7]]):
+            assert isinstance(ensemble.data, pd.DataFrame) is as_pandas
+            frame = _frame(ensemble).sort_values("v")
+            assert list(frame.columns) == ["y", "v"]
+            assert list(frame["v"]) == [float(r) for r in rows]
+            assert [ax.name for ax in ensemble.axes] == ["y"]
+            assert ensemble.axes[0].index_in_array == 0
+            assert (ensemble.quantity, ensemble.unit) == ("v", "counts")
+
+    def test_split_axes_hold_coordinates_of_their_group(self):
+        ensemble = self._data()
+        result = ensemble.split_with_ensemble(self._mask(), "y")
+
+        assert [list(e.axes[0].points) for e in result] == [[0.0, 2.0], [1.0, 3.0]]
+        assert result[0].axes[0] is not result[1].axes[0]
+        assert isinstance(result[0].axes[0], SignalAxis)
+        assert result[0].axes[0].size == 2
+
+    def test_source_axes_are_not_modified(self):
+        ensemble = self._data()
+
+        ensemble.split_with_ensemble(self._mask(), "x")
+
+        assert [ax.name for ax in ensemble.axes] == ["x", "y"]
+        assert [ax.index_in_array for ax in ensemble.axes] == [0, 1]
+        assert isinstance(ensemble.axes[1].points, np.ndarray)
+        np.testing.assert_array_equal(ensemble.axes[1].points, [0.0, 1.0])
+
+    def test_rows_without_match_are_excluded(self):
+        mask = self._mask(xs=(0.0, 1.0), values=(0, 1))
+
+        result = self._data().split_with_ensemble(mask, "x")
+
+        assert len(result) == 2
+        assert sorted(_frame(result[0])["v"]) == [0.0, 4.0]
+        assert sorted(_frame(result[1])["v"]) == [1.0, 5.0]
+
+    def test_categorical_and_unordered_axes_are_kept(self):
+        def extra(df, axes):
+            df = df.assign(cat=list("abab") * 2, u=[5.0, 3.0, 4.0, 1.0] * 2)
+            axes = [
+                *axes,
+                CategoricalAxis(["a", "b"], "cat", 2, "-"),
+                UnorderedSignalAxis(np.array([5.0, 3.0, 4.0, 1.0]), "u", 3, "eV"),
+            ]
+            return df, axes
+
+        ensemble = self._data(extra=extra)
+
+        result = ensemble.split_with_ensemble(self._mask(), ["x", "y"])
+
+        first = result[0]
+        assert [type(ax) for ax in first.axes] == [CategoricalAxis, UnorderedSignalAxis]
+        assert [ax.index_in_array for ax in first.axes] == [0, 1]
+        assert list(first.axes[0].points) == ["a"]
+        assert sorted(first.axes[1].points) == [4.0, 5.0]
+        assert list(_frame(first).columns) == ["cat", "u", "v"]
+
+    def test_no_common_axes(self):
+        other = Ensemble(
+            dd.from_pandas(pd.DataFrame({"q": [1.0], "m": [0]}), npartitions=1),
+            [SignalAxis(np.array([1.0]), "q", 0, "nm", navigate=True)],
+            quantity="m",
+        )
+
+        with pytest.raises(AssertionError, match="q not found"):
+            self._data().split_with_ensemble(other, "y")
+
+    def test_no_common_axes_when_other_axis_is_dropped(self):
+        other = Ensemble(
+            dd.from_pandas(pd.DataFrame({"q": [1.0], "m": [0]}), npartitions=1),
+            [SignalAxis(np.array([1.0]), "q", 0, "nm", navigate=True)],
+            quantity="m",
+        )
+
+        with pytest.raises(ValueError, match="No common axes"):
+            self._data().split_with_ensemble(other, "q")
+
+
 class TestEnsembleRebinToNewAxisCoverage:
     def test_rebin_to_new_axis_binsize(self):
         result = _xy_ensemble().rebin_to_new_axis("x", new_binsize=3.0)

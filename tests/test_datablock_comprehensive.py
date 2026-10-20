@@ -678,6 +678,111 @@ class TestDataBlockSplitOperations:
             assert split_db.axes[0].name == "y"
 
 
+class TestDataBlockSplitWithDatablock:
+    """split_with_datablock: split one datablock by the values of another"""
+
+    RAW = np.arange(24, dtype=float).reshape(2, 3, 4)
+    # mask over (a, b): value 0 at (0,0), (0,2), (1,2); value 1 at (0,1), (1,0), (1,1)
+    MASK = np.array([[0, 1, 0], [1, 1, 0]])
+
+    @staticmethod
+    def _axis(n, name, index):
+        return SignalAxis(np.arange(n) * 1.0, name, index, "nm", navigate=True)
+
+    def _data(self) -> DataBlock:
+        axes = [self._axis(2, "a", 0), self._axis(3, "b", 1), self._axis(4, "c", 2)]
+        return DataBlock(
+            da.from_array(self.RAW, chunks=2), axes, quantity="signal", unit="counts"
+        )
+
+    def _mask(self, values=None, axes=None) -> DataBlock:
+        values = self.MASK if values is None else values
+        axes = axes or [self._axis(2, "a", 0), self._axis(3, "b", 1)]
+        return DataBlock(da.from_array(values, chunks=2), axes, quantity="mask")
+
+    @pytest.mark.parametrize("drop_axes", [None, []])
+    def test_without_dropping_masks_with_nan(self, drop_axes):
+        result = self._data().split_with_datablock(self._mask(), drop_axes)
+
+        assert len(result) == 2
+        for block, uval in zip(result, [0, 1]):
+            assert block.shape == (2, 3, 4)
+            assert [ax.name for ax in block.axes] == ["a", "b", "c"]
+            assert (block.quantity, block.unit) == ("signal", "counts")
+            expected = np.where((self.MASK == uval)[:, :, None], self.RAW, np.nan)
+            np.testing.assert_array_equal(block.compute(), expected)
+
+    def test_mask_over_subset_of_axes_is_broadcast(self):
+        """A mask lacking axes applies to every position along those axes"""
+        mask = self._mask(np.array([0, 1, 0, 1]), [self._axis(4, "c", 0)])
+
+        result = self._data().split_with_datablock(mask)
+
+        assert len(result) == 2
+        keep_c = np.array([False, True, False, True])
+        np.testing.assert_array_equal(
+            result[1].compute(), np.where(keep_c, self.RAW, np.nan)
+        )
+
+    def test_drop_all_mask_axes_collects_repetitions(self):
+        result = self._data().split_with_datablock(self._mask(), ["a", "b"])
+
+        assert [block.shape for block in result] == [(4, 3), (4, 3)]
+        for block, uval in zip(result, [0, 1]):
+            assert [ax.name for ax in block.axes] == ["c", "repetition"]
+            assert [ax.index_in_array for ax in block.axes] == [0, 1]
+            assert block.axes[1].unit == "#"
+            np.testing.assert_array_equal(block.axes[1].points, [0, 1, 2])
+            assert (block.quantity, block.unit) == ("signal", "counts")
+            a_idx, b_idx = np.nonzero(self.MASK == uval)
+            # Column r holds the full c-profile of the r-th matching (a, b) cell
+            expected = np.stack([self.RAW[a, b] for a, b in zip(a_idx, b_idx)], axis=1)
+            np.testing.assert_array_equal(block.compute(), expected)
+
+    def test_drop_axes_as_string(self):
+        mask = self._mask(np.array([0, 1, 0, 1]), [self._axis(4, "c", 0)])
+
+        result = self._data().split_with_datablock(mask, "c")
+
+        assert [block.shape for block in result] == [(2, 3, 2), (2, 3, 2)]
+        assert [ax.name for ax in result[0].axes] == ["a", "b", "repetition"]
+        np.testing.assert_array_equal(result[0].compute(), self.RAW[:, :, [0, 2]])
+        np.testing.assert_array_equal(result[1].compute(), self.RAW[:, :, [1, 3]])
+
+    def test_drop_axis_missing_from_mask_adds_to_repetitions(self):
+        """Dropping an axis the mask does not have multiplies the repetitions"""
+        result = self._data().split_with_datablock(self._mask(), ["a", "b", "c"])
+
+        assert [block.shape for block in result] == [(12,), (12,)]
+        assert [ax.name for ax in result[0].axes] == ["repetition"]
+        np.testing.assert_array_equal(
+            np.sort(result[0].compute()), np.sort(self.RAW[self.MASK == 0].ravel())
+        )
+
+    def test_drop_axes_must_include_all_mask_axes(self):
+        """Keeping a mask axis would give ragged blocks"""
+        with pytest.raises(ValueError, match="Every axis of `other`"):
+            self._data().split_with_datablock(self._mask(), "b")
+
+    def test_invalid_drop_axes_type(self):
+        with pytest.raises(ValueError, match="drop_axes should be"):
+            self._data().split_with_datablock(self._mask(), 5)
+
+    def test_mask_with_unknown_axis(self):
+        mask = self._mask(np.array([0, 1]), [self._axis(2, "zz", 0)])
+
+        with pytest.raises(RuntimeError, match="zz not found"):
+            self._data().split_with_datablock(mask)
+
+    def test_source_axes_are_not_modified(self):
+        data = self._data()
+
+        data.split_with_datablock(self._mask(), ["a", "b"])
+
+        assert [ax.name for ax in data.axes] == ["a", "b", "c"]
+        assert [ax.index_in_array for ax in data.axes] == [0, 1, 2]
+
+
 class TestDataBlockWithDifferentAxisTypes:
     """Test DataBlock with different axis types"""
 

@@ -787,6 +787,14 @@ class DataBlock:
                     f"Split on datablock has axes unkown to the to be splitted datablock\n\t{axis.name} not found for {self}"
                 )
 
+        if drop_any:
+            ragged = [axis.name for axis in other.axes if axis.name not in drop_axes]
+            if ragged:
+                raise ValueError(
+                    "Every axis of `other` must be in drop_axes, otherwise the "
+                    f"selected values do not form a regular block. Keeping: {ragged}"
+                )
+
         missing: list[int] = [
             axis.index_in_array for axis in self.axes if not other.has_axis(axis.name)
         ]
@@ -795,7 +803,7 @@ class DataBlock:
             new_axes: list[SignalAxis | CategoricalAxis] = [
                 deepcopy(axis) for axis in self.axes if axis.name not in drop_axes
             ]
-        elif not drop_any:
+        else:
             new_axes: list[SignalAxis | CategoricalAxis] = deepcopy(self.axes)
 
         for i, axis in enumerate(new_axes):
@@ -812,12 +820,23 @@ class DataBlock:
             mask = da.broadcast_to(mask, self.data.shape)
 
             if drop_any:
-                matching = self.data[mask]
+                # Dropped axes first: the selected values then come out grouped per
+                # kept-axes position, which is what the reshape below relies on
+                dropped_idx = [
+                    axis.index_in_array for axis in self.axes if axis.name in drop_axes
+                ]
+                kept_idx = [
+                    axis.index_in_array
+                    for axis in self.axes
+                    if axis.name not in drop_axes
+                ]
+                order = (*dropped_idx, *kept_idx)
+                matching = da.transpose(self.data, order)[da.transpose(mask, order)]
                 matching.compute_chunk_sizes()
-                new_data = matching.reshape((
-                    *new_shape,
-                    -1,
-                )).rechunk({0: -1})
+                n_repetitions = matching.shape[0] // int(np.prod(new_shape))
+                new_data = da.moveaxis(
+                    matching.reshape((n_repetitions, *new_shape)), 0, -1
+                )
                 new_axis = SignalAxis(
                     axis_points=np.arange(new_data.shape[-1]),
                     name="repetition",
@@ -834,7 +853,7 @@ class DataBlock:
                     )
                 )
 
-            elif not drop_any:
+            else:
                 new_data = da.where(mask, self.data, da.ones(self.data.shape) * np.nan)
                 split_blocks.append(
                     type(self)(
@@ -1705,23 +1724,37 @@ class Ensemble:
 
         split_ensembles: list[Self] = []
 
-        # Get unique values from other's quantity column
-        unique_values = merged_data[other.quantity].unique()
-        if isinstance(unique_values, da.Array):
+        # Get unique mask values; rows without a match in `other` (NaN) are excluded
+        unique_values = merged_data[other.quantity].dropna().unique()
+        if hasattr(unique_values, "compute"):
             unique_values = unique_values.compute()
+        unique_values = np.sort(np.asarray(unique_values))
 
         for uval in unique_values:
-            # Prepare new axes (excluding dropped axes)
-            new_axes: list[AxisLike] = [
-                axis for axis in self.axes if axis.name not in drop_axes
-            ]
-
             # Filter merged data for this unique value
             filtered_data = merged_data[merged_data[other.quantity] == uval]
 
-            for i, axis in enumerate(new_axes):
-                axis.index_in_array = i
-                axis.points = filtered_data[axis.name]
+            # Every split gets its own axes holding only the coordinates it contains
+            new_axes: list[AxisLike] = []
+            for axis in self.axes:
+                if axis.name in drop_axes:
+                    continue
+                column = filtered_data[axis.name]
+                if hasattr(column, "compute"):
+                    column = column.compute()
+                values = np.sort(column.unique())
+                axis_kwargs = {
+                    "name": axis.name,
+                    "index_in_array": len(new_axes),
+                    "unit": axis.unit,
+                    "navigate": axis.is_nav,
+                }
+                if isinstance(axis, CategoricalAxis):
+                    new_axes.append(CategoricalAxis(list(values), **axis_kwargs))
+                elif isinstance(axis, UnorderedSignalAxis):
+                    new_axes.append(UnorderedSignalAxis(values, **axis_kwargs))
+                else:
+                    new_axes.append(SignalAxis(values, **axis_kwargs))
 
             # Drop the mask column and any dropped axes
             columns_to_keep = [ax.name for ax in new_axes] + [self.quantity]
