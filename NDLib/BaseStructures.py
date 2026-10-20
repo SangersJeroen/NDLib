@@ -657,37 +657,61 @@ class DataBlock:
 
     def reduce_axis(
         self,
-        axis_name: str,
+        axis_name: str | Sequence[str],
         reducer: Callable = lambda s: s.max(),
         out_quantity: str = "q",
         out_unit: str = "-",
     ) -> Self:
-        """Fully reduces axis with name `axis_name`. Default reducer is .max()
-        works similarily to np.max(array, axis=n) but with named axis.
+        """Fully reduces the axis, or axes, with name `axis_name`. Default reducer
+        is .max(), works similarily to np.max(array, axis=n) but with named axes.
+
+        `reducer` is applied with `dask.array.apply_along_axis` to every 1-D slice
+        along the reduced axis, so it can be any function of a 1-D array (a median,
+        a fit, ...) and the operation stays lazy. Dask rechunks the reduced axis into
+        a single chunk for this, so one such slice column should fit in memory.
+
+        When several axes are given they are flattened into one axis (in array
+        order) before `reducer` is applied, so `reducer` sees all of their values
+        at once. This matters for reducers that are not associative like a median.
 
         Args:
-            axis_name: str; name of axis to reduce
-            reducer: Callable; function to reduce array to point
+            axis_name: str | Sequence[str]; name(s) of the axis/axes to reduce
+            reducer: Callable; function to reduce a 1-D array to a point
             out_quantity: str; name of quantity in returned datablock
             out_unit: str; name of the unit of quantity
 
         Returns:
-            [TODO:return]
+            DataBlock; datablock without the reduced axes. A block of which all axes
+                are reduced has no axes and a 0-d array as data.
+
+        Raises:
+            RuntimeError: If an axis is unknown.
+            ValueError: If no axis is given or an axis is given twice.
         """
-        if not self.has_axis(axis_name):
-            raise RuntimeError(f"Axis {axis_name} not found")
+        names: list[str] = [axis_name] if isinstance(axis_name, str) else list(axis_name)
+        if not names:
+            raise ValueError("Give at least one axis to reduce")
+        if len(set(names)) != len(names):
+            raise ValueError(f"Axes to reduce should be unique, got {names}")
+        for name in names:
+            if not self.has_axis(name):
+                raise RuntimeError(f"Axis {name} not found")
 
-        relevant_axis: AxisLike = self.axis_obj(axis_name)
+        reduced = sorted(self.axis_obj(name).index_in_array for name in names)
+        kept = [i for i in range(self.dims) if i not in reduced]
 
-        new_axes = deepcopy(self.axes)
-        new_axes.pop(relevant_axis.index_in_array)
-        # TODO: Handle popping last axis
-        for i in range(len(new_axes)):
-            new_axes[i].index_in_array = i
+        new_axes = [deepcopy(self.axes[i]) for i in kept]
+        for i, axis in enumerate(new_axes):
+            axis.index_in_array = i
 
-        new_data = da.apply_along_axis(
-            func1d=reducer, axis=relevant_axis.index_in_array, arr=self.data
-        )
+        if len(reduced) == 1:
+            new_data = da.apply_along_axis(
+                func1d=reducer, axis=reduced[0], arr=self.data
+            )
+        else:
+            data = da.moveaxis(da.asarray(self.data), reduced, range(-len(reduced), 0))
+            data = data.reshape((*(self.shape[i] for i in kept), -1))
+            new_data = da.apply_along_axis(func1d=reducer, axis=-1, arr=data)
 
         return type(self)(new_data, new_axes, quantity=out_quantity, unit=out_unit)
 
@@ -1256,44 +1280,55 @@ class Ensemble:
 
     def reduce_axis(
         self,
-        axis_name: str,
+        axis_name: str | Sequence[str],
         reducer: dd.groupby.Aggregation,
         out_quantity: str = "q",
         out_unit: str = "-",
     ) -> Self:
-        """Fully reduces axis with name `axis_name`. Default reducer is .max()
-        works similarily to np.max(array, axis=n) but with named axis.
+        """Fully reduces the axis, or axes, with name `axis_name`: the quantity
+        is aggregated over all rows that share their coordinates on the other axes.
 
         Args:
-            axis_name: str; name of axis to reduce
-            reducer: Callable; function to reduce array to point
-            out_quantity: str; name of quantity in returned datablock
+            axis_name: str | Sequence[str]; name(s) of the axis/axes to reduce
+            reducer: aggregation understood by pandas/dask `groupby.agg`, for
+                example "max", "sum" or a `dd.Aggregation`
+            out_quantity: str; name of quantity in returned ensemble, the data
+                column is renamed to match
             out_unit: str; name of the unit of quantity
 
         Returns:
-            [TODO:return]
+            Ensemble; ensemble without the reduced axes
+
+        Raises:
+            RuntimeError: If an axis is unknown.
+            ValueError: If no axis is given, an axis is given twice, all axes
+                are reduced or `out_quantity` is the name of a remaining axis.
         """
-        if not self.has_axis(axis_name):
-            raise RuntimeError(f"Axis {axis_name} not found")
+        names: list[str] = [axis_name] if isinstance(axis_name, str) else list(axis_name)
+        if not names:
+            raise ValueError("Give at least one axis to reduce")
+        if len(set(names)) != len(names):
+            raise ValueError(f"Axes to reduce should be unique, got {names}")
+        for name in names:
+            if not self.has_axis(name):
+                raise RuntimeError(f"Axis {name} not found")
 
-        for axis in self.axes:
-            if axis.name == axis_name:
-                relevant_axis: AxisLike = axis
+        new_axes = [deepcopy(axis) for axis in self.axes if axis.name not in names]
+        if not new_axes:
+            raise ValueError("Cannot reduce all axes of an Ensemble, keep at least one")
+        for i, axis in enumerate(new_axes):
+            axis.index_in_array = i
 
-        new_axes = deepcopy(self.axes)
-        new_axes.pop(relevant_axis.index_in_array)
-        # TODO: Handle popping last axis
-        for i in range(len(new_axes)):
-            new_axes[i].index_in_array = i
-
-        sort_axes = [axis.name for axis in self.axes]
-        sort_axes.remove(relevant_axis.name)
+        sort_axes = [axis.name for axis in new_axes]
+        if out_quantity in sort_axes:
+            raise ValueError(f"out_quantity '{out_quantity}' is the name of an axis")
 
         new_view = (
             self.data
             .groupby(sort_axes, observed=True)[self.quantity]
             .agg(reducer)
             .reset_index()
+            .rename(columns={self.quantity: out_quantity})
         )
 
         return type(self)(new_view, new_axes, quantity=out_quantity, unit=out_unit)

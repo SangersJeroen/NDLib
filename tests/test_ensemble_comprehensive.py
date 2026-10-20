@@ -937,7 +937,9 @@ class TestEnsembleReduceAxisCoverage:
 
         frame = _frame(result).sort_values("y")
         assert list(frame["y"]) == [0.0, 1.0]
-        assert list(frame["v"]) == [80.0, 90.0]
+        # The data column carries the new quantity name
+        assert list(frame["peak"]) == [80.0, 90.0]
+        assert "v" not in frame.columns
         assert [ax.name for ax in result.axes] == ["y"]
         assert result.axes[0].index_in_array == 0
         assert (result.quantity, result.unit) == ("peak", "a.u.")
@@ -945,7 +947,7 @@ class TestEnsembleReduceAxisCoverage:
     def test_reduce_axis_last_axis(self):
         ensemble = _xy_ensemble()
 
-        result = ensemble.reduce_axis("y", "sum")
+        result = ensemble.reduce_axis("y", "sum", out_quantity="v")
 
         frame = _frame(result).sort_values("x")
         assert list(frame["x"]) == list(np.arange(10) * 1.0)
