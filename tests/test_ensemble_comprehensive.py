@@ -15,7 +15,7 @@ import pytest
 # Add the parent directory to the path to import eels_base
 sys.path.insert(0, pathlib.Path(pathlib.Path(pathlib.Path(__file__).resolve()).parent).parent)
 
-from NDLib.AxesStructures import SignalAxis, UnorderedSignalAxis
+from NDLib.AxesStructures import CategoricalAxis, SignalAxis, UnorderedSignalAxis
 from NDLib.BaseStructures import DataBlock, Ensemble
 
 
@@ -550,6 +550,244 @@ class TestEnsembleRebinAxis:
 
         assert isinstance(rebinned, Ensemble)
         assert rebinned.has_axis("x")
+
+
+# x = 0..9 with a y that alternates 0/1. For ``new_binsize=3.0`` the bins hold
+# x = {0,1,2}, {3,4,5,6}, {7,8,9}; for ``bin_edges=[0, 4, 9]`` they hold
+# x = {0..4}, {5..9}.
+_BINSIZE3_CENTERS = [1.49988333, 4.5, 7.50011667]
+_BINSIZE3_BIN_OF_ROW = [0, 0, 0, 1, 1, 1, 1, 2, 2, 2]
+_EDGES_CENTERS = [1.99995, 6.50005]
+_EDGES_BIN_OF_ROW = [0, 0, 0, 0, 0, 1, 1, 1, 1, 1]
+
+
+def _xy_ensemble(*, as_pandas: bool = False) -> Ensemble:
+    df = pd.DataFrame({
+        "x": np.arange(10) * 1.0,
+        "y": [0.0, 1.0] * 5,
+        "v": np.arange(10) * 10.0,
+    })
+    data = df if as_pandas else dd.from_pandas(df, npartitions=2)
+    axes = [
+        SignalAxis(np.arange(10) * 1.0, "x", 0, "nm", navigate=True),
+        SignalAxis(np.array([0.0, 1.0]), "y", 1, "um", navigate=True),
+    ]
+    return Ensemble(data, axes, quantity="v", unit="counts")
+
+
+def _categorical_ensemble() -> Ensemble:
+    df = pd.DataFrame({"x": [0.0, 1.0, 2.0, 3.0], "cat": list("abab"), "v": [1, 2, 3, 4]})
+    axes = [
+        SignalAxis(np.arange(4) * 1.0, "x", 0, "nm", navigate=True),
+        CategoricalAxis(["a", "b"], "cat", 1, "-"),
+    ]
+    return Ensemble(dd.from_pandas(df, npartitions=1), axes, quantity="v")
+
+
+def _frame(ensemble: Ensemble) -> pd.DataFrame:
+    data = ensemble.data
+    return data.compute() if isinstance(data, dd.DataFrame) else data
+
+
+class TestEnsembleRebinAxisCoverage:
+    """rebin_axis: dask and pandas backends, explicit edges and error paths"""
+
+    @pytest.mark.parametrize("as_pandas", [False, True])
+    def test_rebin_axis_binsize(self, as_pandas):
+        ensemble = _xy_ensemble(as_pandas=as_pandas)
+
+        result = ensemble.rebin_axis("x", new_binsize=3.0)
+
+        np.testing.assert_allclose(result.axes[0].points, _BINSIZE3_CENTERS)
+        assert result.axes[0].scale == 3.0
+        assert result.axes[0].index_in_array == 0
+        assert result.axes[1].name == "y"
+        assert (result.quantity, result.unit) == ("v", "counts")
+        assert isinstance(result.data, pd.DataFrame) is as_pandas
+        frame = _frame(result)
+        assert "x_bin" not in frame.columns
+        np.testing.assert_allclose(
+            frame["x"], np.array(_BINSIZE3_CENTERS)[_BINSIZE3_BIN_OF_ROW]
+        )
+        # The quantity is untouched
+        np.testing.assert_allclose(frame["v"], np.arange(10) * 10.0)
+
+    @pytest.mark.parametrize("as_pandas", [False, True])
+    def test_rebin_axis_explicit_bin_edges(self, as_pandas):
+        ensemble = _xy_ensemble(as_pandas=as_pandas)
+
+        result = ensemble.rebin_axis("x", bin_edges=np.array([0.0, 4.0, 9.0]))
+
+        np.testing.assert_allclose(result.axes[0].points, _EDGES_CENTERS)
+        np.testing.assert_allclose(
+            _frame(result)["x"], np.array(_EDGES_CENTERS)[_EDGES_BIN_OF_ROW]
+        )
+
+    def test_rebin_axis_drops_points_outside_edges(self):
+        ensemble = _xy_ensemble()
+
+        result = ensemble.rebin_axis("x", bin_edges=np.array([2.5, 5.5]))
+
+        frame = _frame(result)
+        assert len(frame) == 3
+        np.testing.assert_allclose(frame["v"], [30.0, 40.0, 50.0])
+
+    def test_rebin_axis_pandas_backend_edge_aligned_points(self):
+        """Points sitting exactly on bin edges all land in a bin on the pandas path"""
+        df = pd.DataFrame({"x": [0.0, 1.0, 2.0], "v": [1.0, 2.0, 3.0]})
+        axes = [SignalAxis(np.array([0.0, 1.0, 2.0]), "x", 0, "nm", navigate=True)]
+        ensemble = Ensemble(df, axes, quantity="v")
+
+        result = ensemble.rebin_axis("x", bin_edges=np.array([0.0, 1.0, 2.0]))
+
+        assert len(result.data) == 3
+        assert not result.data["x"].isna().any()
+        assert set(result.data["x"]) == set(result.axes[0].points)
+
+    def test_rebin_axis_needs_binsize_or_edges(self):
+        with pytest.raises(RuntimeError, match="'bin_edges' are None"):
+            _xy_ensemble().rebin_axis("x")
+
+    def test_rebin_axis_nonexisting_axis(self):
+        with pytest.raises(RuntimeError, match="has no axis z"):
+            _xy_ensemble().rebin_axis("z", new_binsize=1.0)
+
+    def test_rebin_axis_categorical_axis(self):
+        with pytest.raises(RuntimeError, match="CategoricalAxis"):
+            _categorical_ensemble().rebin_axis("cat", new_binsize=1.0)
+
+
+class TestEnsembleRebinReduceAxisCoverage:
+    def test_rebin_reduce_axis_one_axis_values(self):
+        df = pd.DataFrame({"x": np.arange(10) * 1.0, "v": np.arange(10) * 10.0})
+        axes = [SignalAxis(np.arange(10) * 1.0, "x", 0, "nm", navigate=True)]
+        ensemble = Ensemble(dd.from_pandas(df, npartitions=2), axes, quantity="v")
+
+        result = ensemble.rebin_reduce_axis("x", new_binsize=3.0, reducer=np.mean)
+
+        frame = _frame(result).sort_values("x")
+        np.testing.assert_allclose(frame["x"], _BINSIZE3_CENTERS)
+        np.testing.assert_allclose(frame["v"], [10.0, 45.0, 80.0])
+        np.testing.assert_allclose(result.axes[0].points, _BINSIZE3_CENTERS)
+        assert "x_bin" not in frame.columns
+
+    def test_rebin_reduce_axis_keeps_other_axes(self):
+        result = _xy_ensemble().rebin_reduce_axis("x", new_binsize=3.0, reducer=np.sum)
+
+        frame = _frame(result)
+        rows = {
+            (round(x, 3), y): v for x, y, v in zip(frame["x"], frame["y"], frame["v"])
+        }
+        assert rows == {
+            (1.5, 0.0): 20.0,
+            (1.5, 1.0): 10.0,
+            (4.5, 0.0): 100.0,
+            (4.5, 1.0): 80.0,
+            (7.5, 0.0): 80.0,
+            (7.5, 1.0): 160.0,
+        }
+        assert (result.quantity, result.unit) == ("v", "counts")
+        assert result.axes[1].name == "y"
+
+    def test_rebin_reduce_axis_explicit_bin_edges(self):
+        result = _xy_ensemble().rebin_reduce_axis(
+            "x", bin_edges=np.array([0.0, 4.0, 9.0]), reducer=np.max
+        )
+
+        frame = _frame(result)
+        rows = {
+            (round(x, 3), y): v for x, y, v in zip(frame["x"], frame["y"], frame["v"])
+        }
+        assert rows == {
+            (2.0, 0.0): 40.0,
+            (2.0, 1.0): 30.0,
+            (6.5, 0.0): 80.0,
+            (6.5, 1.0): 90.0,
+        }
+
+    def test_rebin_reduce_axis_nonexisting_axis(self):
+        with pytest.raises(RuntimeError, match="has no axis z"):
+            _xy_ensemble().rebin_reduce_axis("z", new_binsize=1.0)
+
+    def test_rebin_reduce_axis_categorical_axis(self):
+        with pytest.raises(RuntimeError, match="CategoricalAxis"):
+            _categorical_ensemble().rebin_reduce_axis("cat", new_binsize=1.0)
+
+
+class TestEnsembleRebinToNewAxisCoverage:
+    def test_rebin_to_new_axis_binsize(self):
+        result = _xy_ensemble().rebin_to_new_axis("x", new_binsize=3.0)
+
+        frame = _frame(result)
+        np.testing.assert_allclose(
+            frame["x"], np.array(_BINSIZE3_CENTERS)[_BINSIZE3_BIN_OF_ROW]
+        )
+        np.testing.assert_allclose(frame["v"], np.arange(10) * 10.0)
+        assert list(frame["repetition"]) == [0, 0, 1, 0, 0, 1, 1, 0, 0, 1]
+        assert "x_bin" not in frame.columns
+        assert [ax.name for ax in result.axes] == ["x", "y", "repetition"]
+        np.testing.assert_allclose(result.axes[0].points, _BINSIZE3_CENTERS)
+        rep_axis = result.axes[2]
+        assert list(rep_axis.points) == [0, 1]
+        assert rep_axis.index_in_array == 2
+        assert rep_axis.unit == "#"
+        assert not rep_axis.is_nav
+        assert (result.quantity, result.unit) == ("v", "counts")
+
+    def test_rebin_to_new_axis_explicit_bin_edges(self):
+        result = _xy_ensemble().rebin_to_new_axis(
+            "x", bin_edges=np.array([0.0, 4.0, 9.0])
+        )
+
+        frame = _frame(result)
+        np.testing.assert_allclose(
+            frame["x"], np.array(_EDGES_CENTERS)[_EDGES_BIN_OF_ROW]
+        )
+        assert list(frame["repetition"]) == [0, 0, 1, 1, 2, 0, 0, 1, 1, 2]
+        assert list(result.axes[2].points) == [0, 1, 2]
+
+    def test_rebin_to_new_axis_nonexisting_axis(self):
+        with pytest.raises(RuntimeError, match="has no axis z"):
+            _xy_ensemble().rebin_to_new_axis("z", new_binsize=1.0)
+
+    def test_rebin_to_new_axis_needs_binsize_or_edges(self):
+        with pytest.raises(RuntimeError, match="Either call with"):
+            _xy_ensemble().rebin_to_new_axis("x")
+
+    def test_rebin_to_new_axis_categorical_axis(self):
+        with pytest.raises(RuntimeError, match="CategoricalAxis"):
+            _categorical_ensemble().rebin_to_new_axis("cat", new_binsize=1.0)
+
+
+class TestEnsembleReduceAxisCoverage:
+    @pytest.mark.parametrize("as_pandas", [False, True])
+    def test_reduce_axis_first_axis(self, as_pandas):
+        result = _xy_ensemble(as_pandas=as_pandas).reduce_axis(
+            "x", "max", out_quantity="peak", out_unit="a.u."
+        )
+
+        frame = _frame(result).sort_values("y")
+        assert list(frame["y"]) == [0.0, 1.0]
+        assert list(frame["v"]) == [80.0, 90.0]
+        assert [ax.name for ax in result.axes] == ["y"]
+        assert result.axes[0].index_in_array == 0
+        assert (result.quantity, result.unit) == ("peak", "a.u.")
+
+    def test_reduce_axis_last_axis(self):
+        ensemble = _xy_ensemble()
+
+        result = ensemble.reduce_axis("y", "sum")
+
+        frame = _frame(result).sort_values("x")
+        assert list(frame["x"]) == list(np.arange(10) * 1.0)
+        assert list(frame["v"]) == list(np.arange(10) * 10.0)
+        assert [ax.name for ax in result.axes] == ["x"]
+        # Source ensemble keeps both axes with their original indices
+        assert [ax.index_in_array for ax in ensemble.axes] == [0, 1]
+
+    def test_reduce_axis_nonexisting_axis(self):
+        with pytest.raises(RuntimeError, match="Axis z not found"):
+            _xy_ensemble().reduce_axis("z", "max")
 
 
 class TestEnsembleCOp:

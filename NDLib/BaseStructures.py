@@ -451,24 +451,20 @@ class DataBlock:
         bin_edges: np.ndarray[tuple[int], np.dtype]
         bin_centers: np.ndarray[tuple[int], np.dtype]
 
-        if bin_edges is None:
-            bin_edges, bin_centers = compute_binning(
-                relevant_axis, bin_edges, new_binsize
-            )
+        bin_edges, bin_centers = compute_binning(relevant_axis, bin_edges, new_binsize)
 
         groups = np.digitize(relevant_axis.points, bins=bin_edges, right=True)
 
         seq = []
         new_axis_points = []
         for group in np.unique(groups):
-            if group == len(bin_centers):
+            if group > len(bin_centers):
                 continue  # Values are to the right of final bin_edge
             if group == 0:
                 continue  # Values are to the left of first bin_edge
             mask = groups == group
             view = da.take(self.data, indices=mask, axis=relevant_axis.index_in_array)
-            if len(view) > 0:
-                new_axis_points.append(bin_centers[group - 1])
+            new_axis_points.append(bin_centers[group - 1])
             seq.append(reducer(view, axis=relevant_axis.index_in_array))
         new_view = da.stack(seq=seq, axis=relevant_axis.index_in_array)
 
@@ -1125,10 +1121,7 @@ class Ensemble:
 
         bin_edges: np.ndarray[tuple[int], np.dtype]
         bin_centers: np.ndarray[tuple[int], np.dtype]
-        if bin_edges is None:
-            bin_edges, bin_centers = compute_binning(
-                relevant_axis, bin_edges, new_binsize
-            )
+        bin_edges, bin_centers = compute_binning(relevant_axis, bin_edges, new_binsize)
 
         rebin_axis = relevant_axis.name + "_bin"
         sort_axes = [axis.name for axis in self.axes] + [rebin_axis]
@@ -1185,10 +1178,7 @@ class Ensemble:
 
         bin_edges: np.ndarray[tuple[int], np.dtype]
         bin_centers: np.ndarray[tuple[int], np.dtype]
-        if bin_edges is None:
-            bin_edges, bin_centers = compute_binning(
-                relevant_axis, bin_edges, new_binsize
-            )
+        bin_edges, bin_centers = compute_binning(relevant_axis, bin_edges, new_binsize)
 
         rebin_axis = relevant_axis.name + "_bin"
         sort_axes = [axis.name for axis in self.axes] + [rebin_axis]
@@ -1293,7 +1283,6 @@ class Ensemble:
         new_view[relevant_axis.name] = new_view[rebin_axis].map(
             mapping, meta=(relevant_axis.name, "float64")
         )
-        new_view = new_view.drop(columns=rebin_axis)
 
         # Create groupby keys for all axes to identify unique coordinate combinations
         group_axes = [ax.name for ax in self.axes]

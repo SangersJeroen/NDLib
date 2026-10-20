@@ -478,6 +478,145 @@ class TestDataBlockRebinAndReduce:
         # Check that x axis is removed
         assert not result.has_axis("x")
 
+    @staticmethod
+    def _grid_datablock() -> tuple[DataBlock, np.ndarray]:
+        raw = np.arange(100, dtype=float).reshape(10, 10)
+        axes = [
+            SignalAxis(np.arange(10) * 1.0, "x", 0, "nm", navigate=True),
+            SignalAxis(np.arange(10) * 1.0, "y", 1, "nm", navigate=True),
+        ]
+        return DataBlock(da.from_array(raw, chunks=(5, 5)), axes), raw
+
+    def test_rebin_reduce_axis_binsize_values(self):
+        """Every point lands in a bin, including the last one, and bins are averaged"""
+        db, raw = self._grid_datablock()
+
+        result = db.rebin_reduce_axis("x", new_binsize=2.0)
+
+        groups = [[0, 1, 2], [3, 4], [5, 6], [7, 8, 9]]
+        expected = np.stack([raw[g].mean(axis=0) for g in groups], axis=0)
+        assert result.shape == (4, 10)
+        np.testing.assert_allclose(result.compute(), expected)
+        np.testing.assert_allclose(
+            result.axes[0].points, [1.124875, 3.374975, 5.625025, 7.875125]
+        )
+        assert result.axes[0].index_in_array == 0
+        assert result.axes[1].name == "y"
+
+    def test_rebin_reduce_axis_second_axis(self):
+        """Rebinning the second axis keeps its position in the array"""
+        db, raw = self._grid_datablock()
+
+        result = db.rebin_reduce_axis("y", new_binsize=3.0)
+
+        assert result.shape == (10, 3)
+        assert result.axes[1].name == "y"
+        assert result.axes[1].index_in_array == 1
+        assert result.axes[0].name == "x"
+        groups = [slice(0, 3), slice(3, 7), slice(7, 10)]
+        expected = np.stack([raw[:, g].mean(axis=1) for g in groups], axis=1)
+        np.testing.assert_allclose(result.compute(), expected)
+
+    def test_rebin_reduce_axis_custom_reducer(self):
+        """A non-default reducer is applied to each bin"""
+        db, raw = self._grid_datablock()
+
+        result = db.rebin_reduce_axis("x", new_binsize=2.0, reducer=da.sum)
+
+        groups = [[0, 1, 2], [3, 4], [5, 6], [7, 8, 9]]
+        expected = np.stack([raw[g].sum(axis=0) for g in groups], axis=0)
+        np.testing.assert_allclose(result.compute(), expected)
+
+    def test_rebin_reduce_axis_explicit_bin_edges(self):
+        """Points outside the outermost edges are discarded"""
+        db, raw = self._grid_datablock()
+
+        result = db.rebin_reduce_axis("x", bin_edges=np.array([2.5, 5.5, 8.5]))
+
+        # x <= 2.5 lies left of the first edge, x == 9 right of the last edge
+        expected = np.stack([raw[[3, 4, 5]].mean(axis=0), raw[[6, 7, 8]].mean(axis=0)])
+        assert result.shape == (2, 10)
+        np.testing.assert_allclose(result.compute(), expected)
+        np.testing.assert_allclose(result.axes[0].points, [3.99995, 7.00005])
+
+    def test_rebin_reduce_axis_needs_binsize_or_edges(self):
+        """Neither new_binsize nor bin_edges is an error"""
+        db, _ = self._grid_datablock()
+
+        with pytest.raises(RuntimeError, match="'bin_edges' are None"):
+            db.rebin_reduce_axis("x")
+
+    def test_rebin_reduce_axis_nonexisting_axis(self):
+        """Rebinning an unknown axis raises"""
+        db, _ = self._grid_datablock()
+
+        with pytest.raises(RuntimeError, match="Axis z not found"):
+            db.rebin_reduce_axis("z", new_binsize=2.0)
+
+    def test_rebin_reduce_axis_categorical_axis(self):
+        """Categorical axes cannot be rebinned"""
+        data = da.from_array(np.random.rand(4, 3), chunks=(2, 3))
+        axes = [
+            SignalAxis(np.arange(4) * 1.0, "x", 0, "nm", navigate=True),
+            CategoricalAxis(["a", "b", "c"], "cat", 1, "-"),
+        ]
+        db = DataBlock(data, axes)
+
+        with pytest.raises(RuntimeError, match="CategoricalAxis"):
+            db.rebin_reduce_axis("cat", new_binsize=1.0)
+
+    def test_reduce_axis_default_reducer(self):
+        """The default reducer takes the maximum along the axis"""
+        db, raw = self._grid_datablock()
+
+        result = db.reduce_axis("y")
+
+        np.testing.assert_allclose(result.compute(), raw.max(axis=1))
+        assert result.axes[0].name == "x"
+        assert result.quantity == "q"
+        assert result.unit == "-"
+
+    def test_reduce_axis_middle_axis_renumbers_axes(self):
+        """Axes after the reduced one shift down and get the right index"""
+        raw = np.arange(24, dtype=float).reshape(2, 3, 4)
+        axes = [
+            SignalAxis(np.arange(2) * 1.0, "a", 0, "nm", navigate=True),
+            SignalAxis(np.arange(3) * 1.0, "b", 1, "nm", navigate=True),
+            SignalAxis(np.arange(4) * 1.0, "c", 2, "nm", navigate=True),
+        ]
+        db = DataBlock(da.from_array(raw, chunks=(1, 3, 2)), axes)
+
+        result = db.reduce_axis(
+            "b", reducer=lambda s: s.sum(), out_quantity="total", out_unit="counts"
+        )
+
+        np.testing.assert_allclose(result.compute(), raw.sum(axis=1))
+        assert [ax.name for ax in result.axes] == ["a", "c"]
+        assert [ax.index_in_array for ax in result.axes] == [0, 1]
+        assert result.quantity == "total"
+        assert result.unit == "counts"
+        # The source datablock is left untouched
+        assert [ax.index_in_array for ax in db.axes] == [0, 1, 2]
+
+    def test_reduce_axis_nonexisting_axis(self):
+        """Reducing an unknown axis raises"""
+        db, _ = self._grid_datablock()
+
+        with pytest.raises(RuntimeError, match="Axis z not found"):
+            db.reduce_axis("z")
+
+    def test_reduce_axis_single_axis(self):
+        """Reducing the only axis of a 1-D block yields a 0-d block without axes"""
+        db = DataBlock(
+            da.arange(5.0, chunks=5), [SignalAxis(np.arange(5) * 1.0, "x", 0, "nm")]
+        )
+
+        result = db.reduce_axis("x")
+
+        assert result.axes == []
+        assert result.shape == ()
+        assert float(result.compute()) == 4.0
+
 
 class TestDataBlockSplitOperations:
     """Test split_on_axis operations"""
