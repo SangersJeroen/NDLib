@@ -79,7 +79,8 @@ class TestDataBlockInitialization:
         assert db.dims == 1
         assert db.shape == (20,)
         assert len(db.axes) == 1
-        assert db.quantity == "x"  # Quantity set to squeezed axis name
+        # Only squeezing a categorical axis renames the quantity
+        assert db.quantity == "intensity"
 
     def test_axes_sorting(self):
         """Test that axes are sorted by index_in_array"""

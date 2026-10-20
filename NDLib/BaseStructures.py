@@ -1,8 +1,10 @@
 from collections.abc import Callable, Generator, Iterable, Sequence
 from copy import deepcopy
 import json
+import operator
 from pathlib import Path
 from typing import (
+    Literal,
     Self,
     TypeAlias,
 )
@@ -100,14 +102,17 @@ class DataBlock:
                     f"Shape along dimension {i} has length {shape[i]} but axis has size {axis.size}"
                 )
 
-        # If any axis has size 1, we squeezing the data and set the quantity to the axis name
+        # If any axis has size 1 we squeeze the data. Squeezing a categorical axis
+        # selects one category, so the quantity then becomes the category's axis name.
         if any(axis.size == 1 for axis in axes_list):
             squeeze_axes = [axis.index_in_array for axis in axes_list if axis.size == 1]
             data = da.squeeze(data, axis=tuple(squeeze_axes))
             for axis in axes_list:
-                if axis.size == 1:
+                if axis.size == 1 and isinstance(axis, CategoricalAxis):
                     quantity = axis.name
             axes_list = [axis for axis in axes_list if axis.size > 1]
+            for i, axis in enumerate(axes_list):
+                axis.index_in_array = i
 
         self.data: da.Array | np.ndarray = data
         self.axes: list[SignalAxis | CategoricalAxis] = axes_list
@@ -317,13 +322,22 @@ class DataBlock:
         min_idx: int | None = None,
         max_idx: int | None = None,
     ) -> Generator:
+        """Yields the slices of the datablock along axis `axis_name`, in order.
+
+        Args:
+            axis_name: str; name of axis to iterate over
+            min_idx: int | None; first index along the axis, defaults to the start
+            max_idx: int | None; index along the axis to stop before, defaults to the end
+
+        Yields:
+            array of dimension `dims - 1`; the data at one index of the axis
+
+        Raises:
+            RuntimeError: If datablock does not have axis with name `axis_name`
+        """
         if self.has_axis(axis_name):
             axis_idx = self.axis_obj(axis_name).index_in_array
-            data = self.data.copy()
-            if min_idx is not None and max_idx is not None:
-                data = np.transpose(data, (axis_idx, -1))[min_idx:max_idx]
-            else:
-                data = np.transpose(data, (axis_idx, -1))
+            data = np.moveaxis(self.data, axis_idx, 0)[min_idx:max_idx]
             for i in range(data.shape[0]):
                 yield data[i]
         else:
@@ -379,21 +393,61 @@ class DataBlock:
                     return axis.points
         raise RuntimeError(f"{self} does not have axis {axis_name}")
 
-    def __sub__(self, other):
-        new_data = self.data - other
-        return DataBlock(data=new_data, axes=self.axes)
+    def _binary_op(
+        self, other: "DataBlock | Number | np.ndarray", operation: Callable, *, reflected: bool = False
+    ) -> Self:
+        """Applies `operation(self, other)`, or `operation(other, self)` when
+        `reflected`, elementwise. `other` is a scalar, an array that broadcasts
+        against the data, or a DataBlock with identical axes. The result keeps the
+        quantity and unit of this datablock and owns copies of its axes."""
+        if isinstance(other, DataBlock):
+            same_axes = len(self.axes) == len(other.axes) and all(
+                mine.name == theirs.name
+                and mine.size == theirs.size
+                and np.array_equal(mine.points, theirs.points)
+                for mine, theirs in zip(self.axes, other.axes)
+            )
+            if not same_axes:
+                raise ValueError(
+                    "Operands should have identical axes (name, size and points)"
+                )
+            other = other.data
+        left, right = (other, self.data) if reflected else (self.data, other)
+        return type(self)(
+            operation(left, right), deepcopy(self.axes), self.quantity, self.unit
+        )
 
     def __add__(self, other):
-        new_data = self.data + other
-        return DataBlock(data=new_data, axes=self.axes)
+        return self._binary_op(other, operator.add)
+
+    def __radd__(self, other):
+        return self._binary_op(other, operator.add, reflected=True)
+
+    def __sub__(self, other):
+        return self._binary_op(other, operator.sub)
+
+    def __rsub__(self, other):
+        return self._binary_op(other, operator.sub, reflected=True)
 
     def __mul__(self, other):
-        new_data = self.data * other
-        return DataBlock(data=new_data, axes=self.axes)
+        return self._binary_op(other, operator.mul)
+
+    def __rmul__(self, other):
+        return self._binary_op(other, operator.mul, reflected=True)
+
+    def __truediv__(self, other):
+        return self._binary_op(other, operator.truediv)
+
+    def __rtruediv__(self, other):
+        return self._binary_op(other, operator.truediv, reflected=True)
 
     def __pow__(self, other):
-        new_data = self.data**other
-        return DataBlock(data=new_data, axes=self.axes)
+        return self._binary_op(other, operator.pow)
+
+    def __neg__(self):
+        return type(self)(
+            -self.data, deepcopy(self.axes), self.quantity, self.unit
+        )
 
     def crop_axis(self, axis_name: str, min: float, max: float) -> Self:
         if not self.has_axis(axis_name):
@@ -485,6 +539,95 @@ class DataBlock:
         new_axes = deepcopy(self.axes)
         new_axes[relevant_axis.index_in_array] = new_axis
         return type(self)(new_view, new_axes, self.quantity, self.unit)
+
+    def pool(
+        self,
+        windows: dict[str, int],
+        reducer: Callable = np.mean,
+        remainder: Literal["trim", "error", "pad"] = "trim",
+    ) -> Self:
+        """Pools blocks of neighbouring samples along one or more axes, for example
+        `pool({"x": 3, "y": 3})` averages every 3x3 block of the `x` and `y` axes
+        and leaves all other axes untouched. The operation stays lazy.
+
+        The new points of a pooled axis are the mean of the points in each window.
+
+        Args:
+            windows: dict[str, int]; axis name -> number of samples per window
+            reducer: Callable; reduction with numpy's `axis=` signature, applied
+                to every window, by default the mean
+            remainder: how to treat samples that do not fill a last window:
+                "trim" drops them, "error" raises a ValueError and "pad" fills the
+                last window with NaN (use a nan-aware `reducer` like `np.nanmean`).
+
+        Returns:
+            DataBlock; datablock with the pooled axes, same quantity and unit
+
+        Raises:
+            RuntimeError: If an axis is unknown or categorical.
+            ValueError: If a window is not a positive integer, `remainder` is
+                unknown, a window is larger than its axis while trimming, or the
+                axis does not divide into windows while `remainder="error"`.
+        """
+        if remainder not in ("trim", "error", "pad"):
+            raise ValueError(
+                f"remainder should be 'trim', 'error' or 'pad', got {remainder!r}"
+            )
+
+        factors: dict[int, int] = {}
+        for axis_name, window in windows.items():
+            if not self.has_axis(axis_name):
+                raise RuntimeError(f"Axis {axis_name} not found")
+            axis = self.axis_obj(axis_name)
+            if isinstance(axis, CategoricalAxis):
+                raise RuntimeError(
+                    f"Method not implemented for axis CategoricalAxis {axis_name}"
+                )
+            if isinstance(window, bool) or not isinstance(window, int | np.integer):
+                raise ValueError(
+                    f"Window for {axis_name} should be an int, got {window!r}"
+                )
+            if window < 1:
+                raise ValueError(f"Window for {axis_name} should be >= 1, got {window}")
+            if window > 1:
+                factors[axis.index_in_array] = int(window)
+
+        data = da.asarray(self.data)
+        new_axes = deepcopy(self.axes)
+        for index, window in factors.items():
+            axis = self.axes[index]
+            leftover = axis.size % window
+            points = np.asarray(axis.points)
+            if leftover and remainder == "error":
+                raise ValueError(
+                    f"Axis {axis.name} of size {axis.size} is not divisible by {window}"
+                )
+            if remainder == "trim":
+                if axis.size < window:
+                    raise ValueError(
+                        f"Window {window} is larger than axis {axis.name} of size {axis.size}"
+                    )
+                points = points[: axis.size - leftover]
+            elif leftover:
+                pad = window - leftover
+                widths = [(0, pad) if i == index else (0, 0) for i in range(data.ndim)]
+                data = da.pad(data.astype(float), widths, constant_values=np.nan)
+                points = np.pad(points.astype(float), (0, pad), constant_values=np.nan)
+
+            window_mean = np.nanmean if remainder == "pad" else np.mean
+            new_axes[index] = type(axis)(
+                window_mean(points.reshape(-1, window), axis=1),
+                name=axis.name,
+                index_in_array=axis.index_in_array,
+                unit=axis.unit,
+                navigate=axis.is_nav,
+            )
+
+        if factors:
+            data = da.coarsen(reducer, data, factors, trim_excess=remainder == "trim")
+        if isinstance(self.data, np.ndarray):
+            data = data.compute()
+        return type(self)(data, new_axes, self.quantity, self.unit)
 
     def reduce_axis(
         self,
