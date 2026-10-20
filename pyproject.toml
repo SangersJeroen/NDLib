@@ -31,7 +31,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "basedpyright>=1.31.7",
+    "basedpyright==1.40.2",  # pinned: a new release can add errors and fail the Types job
     "prek",
     "ruff>=0.17.1",
     "gitingest",

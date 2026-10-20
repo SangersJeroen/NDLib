@@ -530,7 +530,7 @@ class DataBlock:
     def _binary_op(
         self,
         other: Operand,
-        operation: Callable[[object, object], da.Array | np.ndarray],
+        operation: Callable[..., da.Array | np.ndarray],
         *,
         reflected: bool = False,
     ) -> Self:
@@ -1253,7 +1253,10 @@ class Ensemble:
             raise ValueError(f"out_quantity '{out_quantity}' is the name of an axis")
 
         grouped = self.data.groupby(sort_axes, observed=True)[self.quantity]
-        aggregated = grouped.agg(reducer)  # pyright: ignore[reportCallIssue, reportArgumentType]
+        aggregated = cast(
+            "pd.Series",
+            grouped.agg(reducer),  # pyright: ignore[reportCallIssue, reportArgumentType]
+        )
         new_view = aggregated.reset_index().rename(
             columns={self.quantity: out_quantity}
         )
