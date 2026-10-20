@@ -1330,6 +1330,33 @@ class Ensemble:
 
         return type(self)(new_view, new_axes, self.quantity, self.unit)
 
+    def pool(
+        self, bin_sizes: dict[str, Number], reducer: Callable = np.mean
+    ) -> Self:
+        """Pools several axes at once, for example `pool({"x": 3.0, "y": 3.0})`.
+
+        An Ensemble has no regular sample grid, so unlike `DataBlock.pool` the sizes
+        are bin widths in axis units, and each named axis is rebinned with
+        `rebin_reduce_axis`. Axes that are not named are untouched.
+
+        Args:
+            bin_sizes: dict[str, Number]; axis name -> new bin width
+            reducer: Callable; function that reduces the values of one bin to a
+                single value, by default the mean
+
+        Returns:
+            Ensemble; ensemble with the rebinned axes, same quantity and unit
+
+        Raises:
+            RuntimeError: If an axis is unknown or categorical.
+        """
+        result = type(self)(self.data, deepcopy(self.axes), self.quantity, self.unit)
+        for axis_name, bin_size in bin_sizes.items():
+            result = result.rebin_reduce_axis(
+                axis_name, new_binsize=bin_size, reducer=reducer
+            )
+        return result
+
     def rebin_axis(
         self,
         axis_name: str,
