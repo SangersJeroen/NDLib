@@ -39,6 +39,8 @@ dev = [
     "radon",
     "skylos",
     "ty",
+    "pytest",
+    "pytest-cov",  # required by the --cov options in [tool.pytest.ini_options]
     "dask-ml",  # optional: DataBlock.cluster
 ]
 

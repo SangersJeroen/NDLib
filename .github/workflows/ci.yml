@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# A newer run on the same branch/PR makes the older one obsolete
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+          # uv.lock is not tracked in this repository, so key the cache on pyproject.toml
+          cache-dependency-glob: pyproject.toml
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      # Uses the pytest settings from pyproject.toml: warnings are errors and
+      # coverage (branch) must stay at or above the configured threshold
+      - name: Run tests
+        run: uv run pytest
+
+      - name: Upload coverage report
+        if: always() && matrix.python-version == '3.13'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          if-no-files-found: ignore
+
+  # Reports ruff findings without failing the build. Make these steps blocking by
+  # removing `continue-on-error` once the existing findings are fixed.
+  lint:
+    name: Lint (advisory)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Ruff format
+        continue-on-error: true
+        run: uvx ruff format --check .
+
+      - name: Ruff check
+        continue-on-error: true
+        run: uvx ruff check . --output-format=github

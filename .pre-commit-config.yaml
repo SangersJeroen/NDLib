@@ -15,6 +15,14 @@ repos:
         stages: [push]
   - repo: local
     hooks:
+      - id: pytest
+        name: pytest with coverage gate (push)
+        entry: uv run pytest
+        language: system
+        types: [python]
+        pass_filenames: false
+        always_run: true
+        stages: [push]
       - id: basedpyright
         name: basedpyright strict type-check (push)
         entry: uv run basedpyright --level error
