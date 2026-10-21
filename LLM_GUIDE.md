@@ -11,6 +11,7 @@ Core dependencies: numpy, pandas, dask (array + dataframe), pyarrow, sparse, zar
 
 ```python
 from NDLib import DataBlock, Ensemble, SignalAxis, UnorderedSignalAxis
+
 # CategoricalAxis is NOT exported at top level:
 from NDLib.AxesStructures import CategoricalAxis
 ```
@@ -40,17 +41,17 @@ x = SignalAxis(np.linspace(0, 9, 10), "x", 0, "um")
 y = SignalAxis(np.linspace(0, 4, 5), "y", 1, "um")
 db = DataBlock(np.random.rand(10, 5), [x, y], quantity="intensity", unit="counts")
 
-sub = db.get({"x": "x>2", "y": "-1<=y<3"})        # filter by expression
-mx  = db.reduce_axis("y", reducer=np.max, out_quantity="peak", out_unit="counts")
-low = db.pool({"x": 2, "y": 5})                   # 2x5 block mean
-rb  = db.rebin_reduce_axis("x", new_binsize=3.0)  # rebin to ~3 um bins
-arr = (db * 2 + 1).compute()                      # np.ndarray
+sub = db.get({"x": "x>2", "y": "-1<=y<3"})  # filter by expression
+mx = db.reduce_axis("y", reducer=np.max, out_quantity="peak", out_unit="counts")
+low = db.pool({"x": 2, "y": 5})  # 2x5 block mean
+rb = db.rebin_reduce_axis("x", new_binsize=3.0)  # rebin to ~3 um bins
+arr = (db * 2 + 1).compute()  # np.ndarray
 
-db.save("run1")                                   # writes run1.zarr
-db2 = DataBlock.load("run1")                      # lazy dask
+db.save("run1")  # writes run1.zarr
+db2 = DataBlock.load("run1")  # lazy dask
 
-ens = db.to_ensemble()                            # long-form DataFrame view
-back = ens.to_datablock()                         # needs regular SignalAxis grid
+ens = db.to_ensemble()  # long-form DataFrame view
+back = ens.to_datablock()  # needs regular SignalAxis grid
 ```
 
 ## Invariants that bite
@@ -110,8 +111,8 @@ The frame must have one column per axis name plus a column named `quantity`.
 | `from_datablock(db)` (classmethod) | Inverse. |
 | `split_on_axis(name)` | One Ensemble per value of the axis (name is required). |
 | `split_with_ensemble(other, drop_axes)` | Left-merge on common axes, split on `other`'s unique quantity values. |
-| `combine(other)` | Left-merge on common axes; appends `other.quantity` as an `UnorderedSignalAxis`. pandas only (casts to `pd.DataFrame`). |
-| `c_op(other, operation)` | Row-wise merge then `operation(Series, Series)`. dask only. |
+| `combine(other)` | Left-merge on common axes; appends `other.quantity` as an `UnorderedSignalAxis`. pandas in, pandas out; dask if either operand is dask. |
+| `c_op(other, operation)` | Row-wise merge then `operation(Series, Series)`. Always lazy (pandas data is re-wrapped). |
 | `save` / `load` | Zarr group holding `dataframe.parquet` plus JSON metadata. `load` returns a dask frame. |
 | `+ - * **` | **Scalar only**, applied to the quantity column. No `/` operator. |
 | `reorder_axis`, `crop_axis`, `cluster` | `NotImplementedError` (not a DataBlock-parity API yet). |
@@ -144,24 +145,28 @@ from NDLib.AxesStructures import CategoricalAxis
 x = SignalAxis(np.linspace(0, 9, 10), "x", 0, "um")
 y = SignalAxis(np.linspace(0, 4, 5), "y", 1, "um")
 e = SignalAxis(np.linspace(0, 100, 20), "E", 2, "eV")
-db = DataBlock(np.random.rand(10, 5, 20), [x, y, e], quantity="intensity", unit="counts")
+db = DataBlock(
+    np.random.rand(10, 5, 20), [x, y, e], quantity="intensity", unit="counts"
+)
 ```
 
 ### Statistics along axes (`reduce_axis`)
 
 ```python
 # mean along E, one value per (x, y): shape (10, 5)
-mean_map = db.reduce_axis("E", reducer=np.mean, out_quantity="mean_intensity", out_unit="counts")
+mean_map = db.reduce_axis(
+    "E", reducer=np.mean, out_quantity="mean_intensity", out_unit="counts"
+)
 
 # default reducer is np.max; any function of a 1-D array works (np.median, np.argmax, a fit...)
 peak_map = db.reduce_axis("E")
 peak_pos = db.reduce_axis("E", reducer=np.argmax, out_quantity="peak_index")
 
 # several axes at once are flattened together first, so a median is the true joint median
-spectrum = db.reduce_axis(["x", "y"], reducer=np.median)      # shape (20,)
+spectrum = db.reduce_axis(["x", "y"], reducer=np.median)  # shape (20,)
 
 # reduce everything: 0-d block
-total = db.reduce_axis(["x", "y", "E"], reducer=np.sum).compute()   # numpy scalar array
+total = db.reduce_axis(["x", "y", "E"], reducer=np.sum).compute()  # numpy scalar array
 ```
 
 `reduce_axis` removes the axis. To keep an axis but make it coarser, use pooling or rebinning.
@@ -169,16 +174,20 @@ total = db.reduce_axis(["x", "y", "E"], reducer=np.sum).compute()   # numpy scal
 ### Select a subset (`get`, `value_get`)
 
 ```python
-sub = db.get({"x": "x>2", "E": "10<=E<50"})      # expression strings, per axis
-sub = db.get({"y": [True, False, True, False, True]})   # boolean mask, one entry per point
-sub = db.get({"x": ">2"})                        # axis name may be omitted
-vals, axes = db.value_get({"x": "x>5"})          # raw dask array + {"x": points, ...}
+sub = db.get({"x": "x>2", "E": "10<=E<50"})  # expression strings, per axis
+sub = db.get({
+    "y": [True, False, True, False, True]
+})  # boolean mask, one entry per point
+sub = db.get({"x": ">2"})  # axis name may be omitted
+vals, axes = db.value_get({"x": "x>5"})  # raw dask array + {"x": points, ...}
 
 # categorical axis: select one category (the axis is then squeezed away and the
 # block's quantity becomes the axis name)
 param = CategoricalAxis(["center", "amplitude", "fwhm"], "param", 2, "-")
 fit = DataBlock(np.random.rand(10, 5, 3), [x, y, param], quantity="fit")
-center = fit.get({"param": "param==center"})     # shape (10, 5), center.quantity == "param"
+center = fit.get({
+    "param": "param==center"
+})  # shape (10, 5), center.quantity == "param"
 ```
 
 `get` keeps the axis type. `crop_axis("E", 20, 60)` is the inclusive-range shortcut for numeric axes.
@@ -186,9 +195,11 @@ center = fit.get({"param": "param==center"})     # shape (10, 5), center.quantit
 ### Downsample / smooth (`pool`, `rebin_reduce_axis`)
 
 ```python
-coarse = db.pool({"x": 2, "y": 5})                         # mean over 2x5 sample blocks
-coarse = db.pool({"x": 3}, remainder="pad", reducer=np.nanmean)   # keep the ragged last window
-binned = db.rebin_reduce_axis("E", new_binsize=10.0)       # bins ~10 eV wide, mean per bin
+coarse = db.pool({"x": 2, "y": 5})  # mean over 2x5 sample blocks
+coarse = db.pool(
+    {"x": 3}, remainder="pad", reducer=np.nanmean
+)  # keep the ragged last window
+binned = db.rebin_reduce_axis("E", new_binsize=10.0)  # bins ~10 eV wide, mean per bin
 binned = db.rebin_reduce_axis("E", bin_edges=[0, 25, 50, 100], reducer=np.sum)
 ```
 
@@ -197,11 +208,13 @@ binned = db.rebin_reduce_axis("E", bin_edges=[0, 25, 50, 100], reducer=np.sum)
 ### Arithmetic and background subtraction
 
 ```python
-scaled = db * 2 + 1                                       # scalars
-normed = db / db.reduce_axis("E", reducer=np.max).compute()[..., None]   # broadcast array
-diff = db - db                                            # DataBlock with identical axes
-bg = db.reduce_axis("x", reducer=np.min).compute()        # shape (5, 20)
-no_bg = db - bg[None, :, :]                               # add the missing axis by hand
+scaled = db * 2 + 1  # scalars
+normed = (
+    db / db.reduce_axis("E", reducer=np.max).compute()[..., None]
+)  # broadcast array
+diff = db - db  # DataBlock with identical axes
+bg = db.reduce_axis("x", reducer=np.min).compute()  # shape (5, 20)
+no_bg = db - bg[None, :, :]  # add the missing axis by hand
 ```
 
 Operands must be scalars, arrays that numpy-broadcast against `db.data`, or a DataBlock with
@@ -210,26 +223,30 @@ identical axes (name, size and points). Quantity and unit of the left operand ar
 ### Reshape, iterate, rename
 
 ```python
-db.reorder_axis("E", 0)               # new block, shape (20, 10, 5)
-db.reorder_axis_inplace("E", -1)      # modifies db
-for spectrum in db.iter_axis("x"):    # yields arrays of shape (5, 20)
+db.reorder_axis("E", 0)  # new block, shape (20, 10, 5)
+db.reorder_axis_inplace("E", -1)  # modifies db
+for spectrum in db.iter_axis("x"):  # yields arrays of shape (5, 20)
     ...
 renamed = db.rename_quantity("I")
-db.axis_p("E")                        # points of an axis
-db.axis_obj("E").unit                 # the axis object
+db.axis_p("E")  # points of an axis
+db.axis_obj("E").unit  # the axis object
 db.has_axis("E")
 ```
 
 ### Split into groups (`split_on_axis`, `split_with_datablock`)
 
 ```python
-per_x = db.split_on_axis("x")         # 10 blocks, each with a 1-point CategoricalAxis "x" (squeezed)
+per_x = db.split_on_axis(
+    "x"
+)  # 10 blocks, each with a 1-point CategoricalAxis "x" (squeezed)
 
 # group by a label map: label each (x, y) pixel by where its spectrum peaks, then split
-labels = db.reduce_axis("E", reducer=np.argmax, out_quantity="label")   # axes x, y
+labels = db.reduce_axis("E", reducer=np.argmax, out_quantity="label")  # axes x, y
 groups = db.split_with_datablock(labels, drop_axes=["x", "y"])
 #   one block per unique label; the values of that group sit on a new "repetition" axis
-groups = db.split_with_datablock(labels)   # without drop_axes: full shape, other values are NaN
+groups = db.split_with_datablock(
+    labels
+)  # without drop_axes: full shape, other values are NaN
 ```
 
 `other` in `split_with_datablock` must have a subset of this block's axes. With `drop_axes`,
@@ -238,8 +255,8 @@ every axis of `other` must be listed.
 ### Save and load
 
 ```python
-db.save("run1")                       # run1.zarr/, ".zarr" added if missing; overwrites
-db = DataBlock.load("run1")           # lazy (dask); axes and quantity restored from JSON
+db.save("run1")  # run1.zarr/, ".zarr" added if missing; overwrites
+db = DataBlock.load("run1")  # lazy (dask); axes and quantity restored from JSON
 ```
 
 ### Scattered data: Ensemble
@@ -247,33 +264,39 @@ db = DataBlock.load("run1")           # lazy (dask); axes and quantity restored 
 ```python
 import pandas as pd, dask.dataframe as dd
 
-df = pd.DataFrame({"t": [0., 1, 2, 3], "v": [1., 2, 3, 4]})   # one column per axis + quantity
+df = pd.DataFrame({
+    "t": [0.0, 1, 2, 3],
+    "v": [1.0, 2, 3, 4],
+})  # one column per axis + quantity
 t = SignalAxis(df["t"].values, "t", 0, "s")
 ens = Ensemble(dd.from_pandas(df, npartitions=1), [t], quantity="v", unit="V")
 
-late = ens.get({"t": ">1"}).compute()          # DataFrame with rows t=2, 3
+late = ens.get({"t": ">1"}).compute()  # DataFrame with rows t=2, 3
 
 # DataBlock <-> Ensemble
-ens = db.to_ensemble()                         # 1000 rows: x, y, E, intensity
-means = ens.reduce_axis("E", "mean", out_quantity="m")           # groupby aggregation
-pooled = ens.pool({"E": 25.0})                 # bin widths in axis units
-doubled = ens * 2                              # scalar arithmetic only
-grid = ens.to_datablock()                      # needs regularly spaced SignalAxes
-ens.save("scatter"); Ensemble.load("scatter") # parquet inside a .zarr dir, loads lazily
+ens = db.to_ensemble()  # 1000 rows: x, y, E, intensity
+means = ens.reduce_axis("E", "mean", out_quantity="m")  # groupby aggregation
+pooled = ens.pool({"E": 25.0})  # bin widths in axis units
+doubled = ens * 2  # scalar arithmetic only
+grid = ens.to_datablock()  # needs regularly spaced SignalAxes
+ens.save("scatter")
+Ensemble.load("scatter")  # parquet inside a .zarr dir, loads lazily
 ```
 
 ### Evaluating lazily
 
 ```python
-lazy = db.reduce_axis("E", reducer=np.mean)    # nothing computed yet (dask)
-arr = lazy.compute()                           # np.ndarray; also swaps lazy.data for numpy
-frame = ens.compute()                          # pd.DataFrame; also swaps ens.data for pandas
+lazy = db.reduce_axis("E", reducer=np.mean)  # nothing computed yet (dask)
+arr = lazy.compute()  # np.ndarray; also swaps lazy.data for numpy
+frame = ens.compute()  # pd.DataFrame; also swaps ens.data for pandas
 ```
 
-Gotcha: `Ensemble.compute()` replaces `ens.data` with a pandas DataFrame, and several dask-only
-methods (`rebin_reduce_axis`, `pool`, `rebin_to_new_axis`, `c_op`, `split_with_ensemble`) then
-fail with `'Series' object has no attribute 'map_partitions'`. Chain those first, call
-`compute()` last, or keep a separate uncomputed `Ensemble`.
+`compute()` still replaces `.data` in place with numpy / pandas. `Ensemble` methods that need
+dask (`rebin_reduce_axis`, `pool`, `rebin_to_new_axis`, `c_op`, `to_datablock`) wrap pandas data
+in a one-partition dask frame again, so they keep working after `compute()` and return lazy
+results; `ens.data` itself stays pandas. `combine` and `split_with_ensemble` keep pandas when
+both operands are pandas and go lazy when either is dask. Even so, prefer computing at the end:
+the re-wrapped frame has a single partition, so there is no parallelism left.
 
 ### Quick chooser
 
