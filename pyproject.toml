@@ -169,6 +169,9 @@ max-nested-blocks = 3  # Maximum nested block depth (PLR1702)
     "ANN",     # Don't require annotations in tests
     "FBT",     # Allow boolean args in tests
 ]
+"examples/**/*.py" = [
+    "T20",     # examples print their results
+]
 
 [tool.ruff.lint.isort]
 known-first-party = ["your_package_name"]  # CHANGE THIS

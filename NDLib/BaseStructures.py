@@ -1060,6 +1060,23 @@ class Ensemble:
         self._computed = True
         return cast("pd.DataFrame", self.data)
 
+    def _dask_data(self) -> dd.DataFrame:
+        """The data as a lazy dask DataFrame. After `compute` the data is a pandas
+        DataFrame, which is wrapped in a single partition again so that the lazy
+        operations keep working. `self.data` itself is not modified."""
+        if isinstance(self.data, dd.DataFrame):
+            return self.data
+        return dd.from_pandas(self.data, npartitions=1)
+
+    def _merge_inputs(
+        self, other: Self
+    ) -> tuple[dd.DataFrame | pd.DataFrame, dd.DataFrame | pd.DataFrame]:
+        """Data of `self` and `other` that can be merged with each other: both
+        pandas stays pandas, otherwise both become lazy dask DataFrames."""
+        if isinstance(self.data, pd.DataFrame) and isinstance(other.data, pd.DataFrame):
+            return self.data, other.data
+        return self._dask_data(), other._dask_data()
+
     def save(self, filepath: str | Path) -> None:
         """Save Ensemble to disk using Zarr/Parquet format for lazy loading.
 
@@ -1285,8 +1302,9 @@ class Ensemble:
         sort_axes = [axis.name for axis in self.axes] + [rebin_axis]
         sort_axes.remove(relevant_axis.name)
 
-        new_view = self.data.assign(**{
-            rebin_axis: self.data[relevant_axis.name].map_partitions(
+        data = self._dask_data()
+        new_view = data.assign(**{
+            rebin_axis: data[relevant_axis.name].map_partitions(
                 pd.cut, bins=edges, include_lowest=True, labels=False
             )
         })
@@ -1449,8 +1467,9 @@ class Ensemble:
         rebin_axis = relevant_axis.name + "_bin"
 
         # Assign bin indices
-        new_view = self.data.assign(**{
-            rebin_axis: self.data[relevant_axis.name].map_partitions(
+        data = self._dask_data()
+        new_view = data.assign(**{
+            rebin_axis: data[relevant_axis.name].map_partitions(
                 pd.cut, bins=edges, include_lowest=True, labels=False
             )
         }).dropna()
@@ -1501,15 +1520,12 @@ class Ensemble:
                     f"can only make datablock of monotonic axes\nAxis: {axis.name} not monotonic"
                 )
 
-        quantity_data: pd.Series | dd.Series = self.data[self.quantity]
-        if isinstance(quantity_data, dd.Series):
-            values = quantity_data.to_dask_array(lengths=True).rechunk()
-        else:
-            values = da.array(quantity_data)
+        data = self._dask_data()
+        values = data[self.quantity].to_dask_array(lengths=True).rechunk()
 
         def grid_index(axis: AxisLike) -> da.Array:
             # position of every row along the regular grid of `axis`
-            column = cast("dd.Series", self.data[axis.name])
+            column = cast("dd.Series", data[axis.name])
             steps = (column - cast("float", axis.min)) / cast("float", axis.scale)  # pyright: ignore[reportOperatorIssue]
             return steps.astype(np.int64).to_dask_array(lengths=True)
 
@@ -1550,8 +1566,8 @@ class Ensemble:
                 f"Can not perform operation, self.data has not column {other.quantity}"
             )
 
-        self_data = cast("dd.DataFrame", self.data)
-        other_data = cast("dd.DataFrame", other.data)
+        self_data = self._dask_data()
+        other_data = other._dask_data()
 
         left_axes = [ax.name for ax in self.axes]
         right_axes = [ax.name for ax in other.axes]
@@ -1591,15 +1607,17 @@ class Ensemble:
         return type(self)(new_data, new_axes, self.quantity, self.unit)
 
     def combine(self, other: Self) -> Self:
-        self_data = cast("pd.DataFrame", self.data)
-        other_data = cast("pd.DataFrame", other.data)
+        self_data, other_data = self._merge_inputs(other)
 
         left_axes = [ax.name for ax in self.axes]
         right_axes = [ax.name for ax in other.axes]
         common_axes = list(set(left_axes) & set(right_axes))
 
-        new_data = self_data.merge(
-            other_data, how="left", on=common_axes, suffixes=("", "_other")
+        new_data = cast("pd.DataFrame", self_data).merge(
+            cast("pd.DataFrame", other_data),
+            how="left",
+            on=common_axes,
+            suffixes=("", "_other"),
         )
         old_axes = self.axes
         new_axis = UnorderedSignalAxis(
@@ -1810,8 +1828,7 @@ class Ensemble:
             raise ValueError("No common axes found between self and other ensemble")
 
         # Join the two dataframes on common axes
-        self_data = cast("dd.DataFrame", self.data)
-        other_data = cast("dd.DataFrame", other.data)
+        self_data, other_data = self._merge_inputs(other)
 
         # Merge to align rows based on common axes
         merged_data = self_data.merge(
