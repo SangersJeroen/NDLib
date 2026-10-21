@@ -44,7 +44,9 @@ from NDLib import DataBlock, SignalAxis
 x = SignalAxis(np.linspace(0, 9, 10), "x", 0, "um")
 y = SignalAxis(np.linspace(0, 4, 5), "y", 1, "um")
 energy = SignalAxis(np.linspace(0, 100, 20), "E", 2, "eV")
-db = DataBlock(np.random.rand(10, 5, 20), [x, y, energy], quantity="intensity", unit="counts")
+db = DataBlock(
+    np.random.rand(10, 5, 20), [x, y, energy], quantity="intensity", unit="counts"
+)
 
 # filter with expressions on named axes
 sub = db.get({"x": "x>2", "E": "10<=E<50"})
