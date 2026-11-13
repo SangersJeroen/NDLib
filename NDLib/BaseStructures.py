@@ -283,7 +283,8 @@ class DataBlock:
         unit: str; unit corresponding to the quantity stored in data
         shape: tuple[int, ...]; shape of data
         metadata: dict; interpreted, calibrated acquisition metadata (JSON-able)
-        original_metadata: dict; metadata exactly as found in the source file
+        original_metadata: dict; metadata exactly as found in the source file (shared
+            with derived blocks, treat as read-only)
         provenance: list[str]; human-readable record of the operations applied
 
     Axes flagged `is_nav` are navigation axes (the scan, e.g. x and y of a spectrum
@@ -403,9 +404,14 @@ class DataBlock:
     def _inherit(self, new: Self, step: str | None = None) -> Self:
         """Copy this block's metadata and provenance onto `new` and return it,
         optionally appending a provenance `step`. Subclasses extend this to carry
-        their own state over to derived blocks."""
+        their own state over to derived blocks.
+
+        `metadata` is copied. `original_metadata`, the file's own record (often
+        thousands of tags), is shared between a block and the blocks derived from it
+        so that deriving stays cheap: treat it as read-only.
+        """
         new.metadata = deepcopy(self.metadata)
-        new.original_metadata = deepcopy(self.original_metadata)
+        new.original_metadata = self.original_metadata
         new.provenance = [*self.provenance, *([step] if step else [])]
         return new
 

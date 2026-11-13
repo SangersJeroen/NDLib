@@ -146,3 +146,14 @@ def test_subclass_without_override_falls_back_for_squeeze_false() -> None:
     )
     assert type(block.isel(x=slice(0, 2))) is DataBlock
     assert type(-block) is Bare  # the squeeze=True path still instantiates the subclass
+
+
+def test_original_metadata_is_shared_but_metadata_is_copied() -> None:
+    source = make()
+    source.original_metadata["tag"] = {"a": 1}
+    derived = source.isel(x=slice(0, 2))
+    assert (
+        derived.original_metadata is source.original_metadata
+    )  # cheap: not copied per derive
+    assert derived.metadata == source.metadata
+    assert derived.metadata is not source.metadata  # working metadata is independent
