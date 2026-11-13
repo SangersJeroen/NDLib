@@ -377,20 +377,62 @@ class DataBlock:
 
         self.shape: tuple[int, ...] = tuple(axis.size for axis in self.axes)
 
+    def _construct(
+        self,
+        data: da.Array | np.ndarray,
+        axes: list[AxisLike],
+        quantity: str,
+        unit: str,
+        *,
+        squeeze: bool = True,
+    ) -> Self:
+        """Create a block of this class from `data` and `axes`.
+
+        This is the single place where derived blocks are instantiated. A subclass
+        whose `__init__` takes more or different arguments overrides it to pass them
+        on (it should also accept `squeeze`). Without an override a subclass that
+        defines its own `__init__` gets a plain `DataBlock` when `squeeze` is False,
+        as its constructor arguments are not known here.
+        """
+        if squeeze:
+            return type(self)(data, axes, quantity, unit)
+        if type(self).__init__ is DataBlock.__init__:
+            return type(self)(data, axes, quantity, unit, squeeze=False)
+        return cast("Self", DataBlock(data, axes, quantity, unit, squeeze=False))
+
     def _inherit(self, new: Self, step: str | None = None) -> Self:
         """Copy this block's metadata and provenance onto `new` and return it,
-        optionally appending a provenance `step`."""
+        optionally appending a provenance `step`. Subclasses extend this to carry
+        their own state over to derived blocks."""
         new.metadata = deepcopy(self.metadata)
         new.original_metadata = deepcopy(self.original_metadata)
         new.provenance = [*self.provenance, *([step] if step else [])]
         return new
 
-    def _rebuilt(self, data: da.Array | np.ndarray, axes: list[AxisLike]) -> Self:
-        """New block of this class from `data` and `axes`, size-1 axes kept. A
-        subclass with its own `__init__` yields a plain DataBlock instead, as the
-        constructor arguments of subclasses are not known here."""
-        cls = type(self) if type(self).__init__ is DataBlock.__init__ else DataBlock
-        return cast("Self", cls(data, axes, self.quantity, self.unit, squeeze=False))
+    def _derive(  # ruff: ignore[too-many-arguments]
+        self,
+        data: da.Array | np.ndarray,
+        axes: list[AxisLike],
+        *,
+        quantity: str | None = None,
+        unit: str | None = None,
+        step: str | None = None,
+        squeeze: bool = True,
+    ) -> Self:
+        """The block derived from this one: `_construct` followed by `_inherit`.
+
+        `quantity` and `unit` default to this block's. Every operation that returns a
+        new block goes through here, so subclasses only override `_construct` and
+        `_inherit` to survive all of them.
+        """
+        new = self._construct(
+            data,
+            axes,
+            self.quantity if quantity is None else quantity,
+            self.unit if unit is None else unit,
+            squeeze=squeeze,
+        )
+        return self._inherit(new, step)
 
     @property
     def nav_axes(self) -> list[AxisLike]:
@@ -418,15 +460,14 @@ class DataBlock:
         new_axes = deepcopy(self.axes)
         for axis in new_axes:
             axis.is_nav = axis.name in axis_names
-        new = type(self)(self.data, new_axes, self.quantity, self.unit)
-        return self._inherit(new, f"with_navigation{axis_names}")
+        return self._derive(self.data, new_axes, step=f"with_navigation{axis_names}")
 
     def isel(self, **indexers: int | slice) -> Self:
         """Select by integer position along named axes, keeping the calibration.
 
         An int drops the axis, a slice keeps it (sub-ranged, a `LinearAxis` stays
         linear). Selection is lazy and cheap for dask data. Axes of size 1 are kept.
-        A subclass with its own `__init__` returns a plain DataBlock.
+        A subclass with its own `__init__` keeps its type if it overrides `_construct`.
 
         Example: `sb.isel(x=3, y=slice(0, 10))`
         """
@@ -434,8 +475,8 @@ class DataBlock:
             self.axes, indexers, Selection.resolve_position
         )
         data = Selection.apply(self.data, resolved)
-        return self._inherit(
-            self._rebuilt(data, new_axes), f"isel({_describe(indexers)})"
+        return self._derive(
+            data, new_axes, step=f"isel({_describe(indexers)})", squeeze=False
         )
 
     def sel(self, **indexers: LabelKey) -> Self:
@@ -451,8 +492,8 @@ class DataBlock:
             self.axes, indexers, Selection.resolve_label
         )
         data = Selection.apply(self.data, resolved)
-        return self._inherit(
-            self._rebuilt(data, new_axes), f"sel({_describe(indexers)})"
+        return self._derive(
+            data, new_axes, step=f"sel({_describe(indexers)})", squeeze=False
         )
 
     def _reduced(self, axis_names: tuple[str, ...], how: str, *, skipna: bool) -> Self:
@@ -473,7 +514,7 @@ class DataBlock:
         ]
         for i, axis in enumerate(kept):
             axis.index_in_array = i
-        return self._inherit(self._rebuilt(data, kept), f"{how}_over{axis_names}")
+        return self._derive(data, kept, step=f"{how}_over{axis_names}", squeeze=False)
 
     def sum_over(self, *axis_names: str, skipna: bool = False) -> Self:
         """Sum over the named axes, which are dropped. Uses dask's native reduction."""
@@ -533,7 +574,7 @@ class DataBlock:
             ValueError: If `target_index` is outside the dimensions of the datablock.
         """
         new_axes, new_data = self._moved(axis_name, target_index)
-        return self._inherit(type(self)(new_data, new_axes, self.quantity, self.unit))
+        return self._derive(new_data, new_axes)
 
     def reorder_axis_inplace(self, axis_name: str, target_index: int) -> None:
         """
@@ -733,11 +774,7 @@ class DataBlock:
         else:
             operand = other
         left, right = (operand, self.data) if reflected else (self.data, operand)
-        return self._inherit(
-            type(self)(
-                operation(left, right), deepcopy(self.axes), self.quantity, self.unit
-            )
-        )
+        return self._derive(operation(left, right), deepcopy(self.axes))
 
     def __add__(self, other: Operand) -> Self:
         return self._binary_op(other, operator.add)
@@ -767,9 +804,7 @@ class DataBlock:
         return self._binary_op(other, operator.pow)
 
     def __neg__(self) -> Self:
-        return self._inherit(
-            type(self)(-self.data, deepcopy(self.axes), self.quantity, self.unit)
-        )
+        return self._derive(-self.data, deepcopy(self.axes))
 
     def crop_axis(self, axis_name: str, min: float, max: float) -> Self:
         if not self.has_axis(axis_name):
@@ -798,9 +833,7 @@ class DataBlock:
 
         new_axes = deepcopy(self.axes)
         new_axes[relevant_axis.index_in_array] = new_axis
-        return self._inherit(
-            type(self)(keep_values, new_axes, self.quantity, self.unit)
-        )
+        return self._derive(keep_values, new_axes)
 
     def rebin_reduce_axis(
         self,
@@ -856,7 +889,7 @@ class DataBlock:
         )
         new_axes = deepcopy(self.axes)
         new_axes[relevant_axis.index_in_array] = new_axis
-        return self._inherit(type(self)(new_view, new_axes, self.quantity, self.unit))
+        return self._derive(new_view, new_axes)
 
     def pool(
         self,
@@ -911,7 +944,7 @@ class DataBlock:
             data = da.coarsen(reducer, data, factors, trim_excess=remainder == "trim")
         if isinstance(self.data, np.ndarray):
             data = data.compute()
-        return self._inherit(type(self)(data, new_axes, self.quantity, self.unit))
+        return self._derive(data, new_axes)
 
     def _pool_factors(self, windows: Mapping[str, object]) -> dict[int, int]:
         """Validated windows larger than 1, keyed by the index of their axis."""
@@ -994,9 +1027,7 @@ class DataBlock:
             data = data.reshape((*(self.shape[i] for i in kept), -1))
             new_data = da.apply_along_axis(func1d=reducer, axis=-1, arr=data)
 
-        return self._inherit(
-            type(self)(new_data, new_axes, quantity=out_quantity, unit=out_unit)
-        )
+        return self._derive(new_data, new_axes, quantity=out_quantity, unit=out_unit)
 
     def _select(
         self, indexing: Mapping[str, object]
@@ -1051,7 +1082,7 @@ class DataBlock:
                 has the wrong length or dimension.
         """
         new_data, new_axes = self._select(indexing)
-        return self._inherit(type(self)(new_data, new_axes, self.quantity, self.unit))
+        return self._derive(new_data, new_axes)
 
     def value_get(
         self, indexing: Mapping[str, object]
@@ -1090,9 +1121,7 @@ class DataBlock:
         cluster_data = cluster_labels.reshape(self.data.shape)
         new_axes = deepcopy(self.axes)
 
-        return self._inherit(
-            type(self)(cluster_data, new_axes, quantity="cluster", unit="-")
-        )
+        return self._derive(cluster_data, new_axes, quantity="cluster", unit="-")
 
     def split_on_axis(self, axis_name: str) -> list[Self]:
         """
@@ -1122,16 +1151,7 @@ class DataBlock:
                 self.data, indices=(split_coords == val), axis=new_axis.index_in_array
             )
 
-            split_blocks.append(
-                self._inherit(
-                    type(self)(
-                        data=new_data,
-                        axes=new_axes,
-                        quantity=self.quantity,
-                        unit=self.unit,
-                    )
-                )
-            )
+            split_blocks.append(self._derive(new_data, new_axes))
         return split_blocks
 
     def split_with_datablock(
@@ -1194,11 +1214,7 @@ class DataBlock:
             else:
                 new_data = da.where(mask, self.data, da.ones(self.data.shape) * np.nan)
                 block_axes = deepcopy(new_axes)
-            split_blocks.append(
-                self._inherit(
-                    type(self)(new_data, block_axes, self.quantity, self.unit)
-                )
-            )
+            split_blocks.append(self._derive(new_data, block_axes))
         return split_blocks
 
     def _collect_matching(
