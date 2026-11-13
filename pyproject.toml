@@ -327,7 +327,7 @@ python_functions = ["test_*"]
 addopts = [
     "--strict-markers",
     "--strict-config",
-    "-W error",  # STRICT: Treat warnings as errors (catch deprecations early)
+    # warnings-as-errors comes from filterwarnings below (a bare -W error here would override its ignores)
     "--tb=short",
     "--cov=.",
     "--cov-report=term-missing:skip-covered",
@@ -337,6 +337,10 @@ addopts = [
 ]
 filterwarnings = [
     "error",  # Treat all warnings as errors by default
+    # dask's parquet reader/writer still call DataFrame.(re)set_index(inplace=True), which pandas>=3 deprecates.
+    # The call is inside dask, not NDLib; drop this once dask stops using `inplace`.
+    "ignore:The inplace keyword in DataFrame.(set|reset)_index:pandas.errors.Pandas4Warning",
+    "ignore:An error occurred while calling the read_parquet method:pandas.errors.Pandas4Warning",
     # Uncomment to selectively ignore specific third-party warnings if needed:
     # "ignore::DeprecationWarning:some_noisy_library",
     # "ignore::UserWarning:another_library",
