@@ -6,6 +6,7 @@ import logging
 import operator
 from pathlib import Path
 from typing import (
+    Any,
     Literal,
     NotRequired,
     Self,
@@ -23,7 +24,13 @@ import sparse
 from typing_extensions import override
 import zarr
 
-from .AxesStructures import CategoricalAxis, SignalAxis, UnorderedSignalAxis
+from . import Selection
+from .AxesStructures import (
+    CategoricalAxis,
+    LinearAxis,
+    SignalAxis,
+    UnorderedSignalAxis,
+)
 from .IndexingUtils import (
     parse_categorical_to_mask,
     parse_categorical_to_query,
@@ -35,12 +42,19 @@ from .Types import Axis1D, Number
 # dask-ml is optional, it is imported when DataBlock.cluster needs it
 DASKML: bool = importlib.util.find_spec("dask_ml") is not None
 
-AxisLike: TypeAlias = SignalAxis | UnorderedSignalAxis | CategoricalAxis
+LabelKey: TypeAlias = "float | str | slice | Sequence[str]"
+AxisLike: TypeAlias = (
+    SignalAxis | UnorderedSignalAxis | CategoricalAxis
+)  # LinearAxis is a SignalAxis
 Operand: TypeAlias = "DataBlock | Number | np.ndarray"
 TwoSeriesOperation: TypeAlias = Callable[[pd.Series, pd.Series], pd.Series]
 
 
 logger = logging.getLogger(__name__)
+
+
+def _describe(indexers: Mapping[str, object]) -> str:
+    return ", ".join(f"{name}={key!r}" for name, key in indexers.items())
 
 
 def return_axis_idx(axis: AxisLike) -> int:
@@ -92,8 +106,15 @@ def _filtered_axis(axis: AxisLike, mask: np.ndarray) -> AxisLike:
             axis.unit,
             navigate=axis.is_nav,
         )
-    return type(axis)(
-        kept, axis.name, axis.index_in_array, axis.unit, navigate=axis.is_nav
+    return _axis_from_points(axis, kept)
+
+
+def _axis_from_points(axis: AxisLike, points: np.ndarray) -> AxisLike:
+    """New axis of the kind of `axis` with the given `points`. A LinearAxis becomes
+    a SignalAxis, as the new points need not be uniform."""
+    axis_class = SignalAxis if isinstance(axis, LinearAxis) else type(axis)
+    return axis_class(
+        points, axis.name, axis.index_in_array, axis.unit, navigate=axis.is_nav
     )
 
 
@@ -107,12 +128,29 @@ class _AxisRecord(TypedDict):
     navigate: bool
     points: NotRequired[list[float]]
     categories: NotRequired[list[str]]
+    offset: NotRequired[float]
+    scale: NotRequired[float]
+    size: NotRequired[int]
 
 
 class _Metadata(TypedDict):
     quantity: str
     unit: str
     axes: list[_AxisRecord]
+    metadata: NotRequired[dict[str, Any]]
+    original_metadata: NotRequired[dict[str, Any]]
+    provenance: NotRequired[list[str]]
+
+
+def _json_default(value: object) -> object:
+    """JSON encoder for the numpy values that commonly end up in metadata."""
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, Path):
+        return str(value)
+    raise TypeError(f"Metadata value of type {type(value)} is not JSON serializable")
 
 
 def _axis_to_record(axis: AxisLike) -> _AxisRecord:
@@ -123,6 +161,11 @@ def _axis_to_record(axis: AxisLike) -> _AxisRecord:
         unit=axis.unit,
         navigate=axis.is_nav,
     )
+    if isinstance(axis, LinearAxis):
+        record["offset"] = axis.offset
+        record["scale"] = axis.scale
+        record["size"] = axis.size
+        return record
     values = np.asarray(axis.points).tolist()
     if isinstance(axis, CategoricalAxis):
         record["categories"] = values
@@ -142,6 +185,12 @@ def _axis_from_record(record: _AxisRecord) -> AxisLike:
         if categories is None:
             raise ValueError(f"Saved axis '{name}' has no categories")
         return CategoricalAxis(categories, name, index, unit, navigate=navigate)
+    if kind == "LinearAxis":
+        try:
+            offset, scale, size = record["offset"], record["scale"], record["size"]
+        except KeyError as error:
+            raise ValueError(f"Saved axis '{name}' lacks {error}") from error
+        return LinearAxis(offset, scale, size, name, index, unit, navigate=navigate)
     if kind not in {"SignalAxis", "UnorderedSignalAxis"}:
         raise ValueError(f"Unknown axis type: {kind}")
     points = record.get("points")
@@ -233,14 +282,27 @@ class DataBlock:
         quantity: str; name of the quantity that is stored in data
         unit: str; unit corresponding to the quantity stored in data
         shape: tuple[int, ...]; shape of data
+        metadata: dict; interpreted, calibrated acquisition metadata (JSON-able)
+        original_metadata: dict; metadata exactly as found in the source file
+        provenance: list[str]; human-readable record of the operations applied
+
+    Axes flagged `is_nav` are navigation axes (the scan, e.g. x and y of a spectrum
+    image); the others are signal axes (the data recorded at each navigation point,
+    e.g. the energy loss). See `nav_axes`, `signal_axes` and `with_navigation`.
+    Pass `squeeze=False` to keep axes of size 1 instead of squeezing them away.
     """
 
-    def __init__(
+    def __init__(  # ruff: ignore[too-many-arguments]
         self,
         data: da.Array | np.ndarray,
         axes: Iterable[AxisLike],
         quantity: str = "q",
         unit: str = "-",
+        *,
+        metadata: Mapping[str, Any] | None = None,
+        original_metadata: Mapping[str, Any] | None = None,
+        provenance: Iterable[str] | None = None,
+        squeeze: bool = True,
     ) -> None:
         super().__init__()
         axes_list: list[AxisLike] = list(axes)
@@ -262,7 +324,7 @@ class DataBlock:
 
         # If any axis has size 1 we squeeze the data. Squeezing a categorical axis
         # selects one category, so the quantity then becomes the category's axis name.
-        if any(axis.size == 1 for axis in axes_list):
+        if squeeze and any(axis.size == 1 for axis in axes_list):
             squeeze_axes = [axis.index_in_array for axis in axes_list if axis.size == 1]
             data = da.squeeze(data, axis=tuple(squeeze_axes))
             for axis in axes_list:
@@ -277,6 +339,9 @@ class DataBlock:
         self.dims: int = len(self.data.shape)
         self.quantity: str = quantity
         self.unit: str = unit
+        self.metadata: dict[str, Any] = deepcopy(dict(metadata or {}))
+        self.original_metadata: dict[str, Any] = deepcopy(dict(original_metadata or {}))
+        self.provenance: list[str] = list(provenance or [])
         if isinstance(self.data, da.Array):
             self._computed: bool = False
         else:
@@ -311,6 +376,112 @@ class DataBlock:
                 self.axes[dim].index_in_array = dim
 
         self.shape: tuple[int, ...] = tuple(axis.size for axis in self.axes)
+
+    def _inherit(self, new: Self, step: str | None = None) -> Self:
+        """Copy this block's metadata and provenance onto `new` and return it,
+        optionally appending a provenance `step`."""
+        new.metadata = deepcopy(self.metadata)
+        new.original_metadata = deepcopy(self.original_metadata)
+        new.provenance = [*self.provenance, *([step] if step else [])]
+        return new
+
+    def _rebuilt(self, data: da.Array | np.ndarray, axes: list[AxisLike]) -> Self:
+        """New block of this class from `data` and `axes`, size-1 axes kept. A
+        subclass with its own `__init__` yields a plain DataBlock instead, as the
+        constructor arguments of subclasses are not known here."""
+        cls = type(self) if type(self).__init__ is DataBlock.__init__ else DataBlock
+        return cast("Self", cls(data, axes, self.quantity, self.unit, squeeze=False))
+
+    @property
+    def nav_axes(self) -> list[AxisLike]:
+        """The navigation axes (`is_nav`), in array order."""
+        return [axis for axis in self.axes if axis.is_nav]
+
+    @property
+    def signal_axes(self) -> list[AxisLike]:
+        """The signal axes (not `is_nav`), in array order."""
+        return [axis for axis in self.axes if not axis.is_nav]
+
+    @property
+    def nav_shape(self) -> tuple[int, ...]:
+        return tuple(axis.size for axis in self.nav_axes)
+
+    @property
+    def signal_shape(self) -> tuple[int, ...]:
+        return tuple(axis.size for axis in self.signal_axes)
+
+    def with_navigation(self, *axis_names: str) -> Self:
+        """New block in which exactly the named axes are navigation axes."""
+        unknown = [name for name in axis_names if not self.has_axis(name)]
+        if unknown:
+            raise KeyError(f"No such axes: {unknown}")
+        new_axes = deepcopy(self.axes)
+        for axis in new_axes:
+            axis.is_nav = axis.name in axis_names
+        new = type(self)(self.data, new_axes, self.quantity, self.unit)
+        return self._inherit(new, f"with_navigation{axis_names}")
+
+    def isel(self, **indexers: int | slice) -> Self:
+        """Select by integer position along named axes, keeping the calibration.
+
+        An int drops the axis, a slice keeps it (sub-ranged, a `LinearAxis` stays
+        linear). Selection is lazy and cheap for dask data. Axes of size 1 are kept.
+        A subclass with its own `__init__` returns a plain DataBlock.
+
+        Example: `sb.isel(x=3, y=slice(0, 10))`
+        """
+        resolved, new_axes = Selection.plan(
+            self.axes, indexers, Selection.resolve_position
+        )
+        data = Selection.apply(self.data, resolved)
+        return self._inherit(
+            self._rebuilt(data, new_axes), f"isel({_describe(indexers)})"
+        )
+
+    def sel(self, **indexers: LabelKey) -> Self:
+        """Select by calibrated coordinate along named axes, keeping the calibration.
+
+        A number selects the nearest point and drops the axis; `slice(lo, hi)`
+        keeps points with lo <= value <= hi (either bound may be None); on a
+        categorical axis a name or a list of names. Axes of size 1 are kept.
+
+        Example: `si.sel(x=slice(2.0, 4.0), E=slice(280.0, 300.0))`
+        """
+        resolved, new_axes = Selection.plan(
+            self.axes, indexers, Selection.resolve_label
+        )
+        data = Selection.apply(self.data, resolved)
+        return self._inherit(
+            self._rebuilt(data, new_axes), f"sel({_describe(indexers)})"
+        )
+
+    def _reduced(self, axis_names: tuple[str, ...], how: str, *, skipna: bool) -> Self:
+        if not axis_names:
+            raise ValueError("Name at least one axis to reduce")
+        unknown = [name for name in axis_names if not self.has_axis(name)]
+        if unknown:
+            raise KeyError(f"No such axes: {unknown}")
+        positions = tuple(
+            sorted({self.axis_obj(name).index_in_array for name in axis_names})
+        )
+        name = ("nan" if skipna else "") + how
+        data = getattr(da if isinstance(self.data, da.Array) else np, name)(
+            self.data, axis=positions
+        )
+        kept = [
+            deepcopy(axis) for axis in self.axes if axis.index_in_array not in positions
+        ]
+        for i, axis in enumerate(kept):
+            axis.index_in_array = i
+        return self._inherit(self._rebuilt(data, kept), f"{how}_over{axis_names}")
+
+    def sum_over(self, *axis_names: str, skipna: bool = False) -> Self:
+        """Sum over the named axes, which are dropped. Uses dask's native reduction."""
+        return self._reduced(axis_names, "sum", skipna=skipna)
+
+    def mean_over(self, *axis_names: str, skipna: bool = False) -> Self:
+        """Mean over the named axes, which are dropped. Uses dask's native reduction."""
+        return self._reduced(axis_names, "mean", skipna=skipna)
 
     def rename_quantity(self, new_name: str) -> Self:
         new_self = deepcopy(self)
@@ -362,7 +533,7 @@ class DataBlock:
             ValueError: If `target_index` is outside the dimensions of the datablock.
         """
         new_axes, new_data = self._moved(axis_name, target_index)
-        return type(self)(new_data, new_axes, self.quantity, self.unit)
+        return self._inherit(type(self)(new_data, new_axes, self.quantity, self.unit))
 
     def reorder_axis_inplace(self, axis_name: str, target_index: int) -> None:
         """
@@ -417,8 +588,14 @@ class DataBlock:
             unit=self.unit,
             axes=[_axis_to_record(axis) for axis in self.axes],
         )
+        if self.metadata:
+            metadata["metadata"] = self.metadata
+        if self.original_metadata:
+            metadata["original_metadata"] = self.original_metadata
+        if self.provenance:
+            metadata["provenance"] = self.provenance
         root = zarr.open_group(str(filepath), mode="a")
-        root.attrs["metadata"] = json.dumps(metadata)
+        root.attrs["metadata"] = json.dumps(metadata, default=_json_default)
 
     @classmethod
     def load(cls, filepath: str | Path) -> Self:
@@ -448,6 +625,9 @@ class DataBlock:
             axes=[_axis_from_record(record) for record in metadata["axes"]],
             quantity=metadata["quantity"],
             unit=metadata["unit"],
+            metadata=metadata.get("metadata"),
+            original_metadata=metadata.get("original_metadata"),
+            provenance=metadata.get("provenance"),
         )
 
     def iter_axis(
@@ -553,8 +733,10 @@ class DataBlock:
         else:
             operand = other
         left, right = (operand, self.data) if reflected else (self.data, operand)
-        return type(self)(
-            operation(left, right), deepcopy(self.axes), self.quantity, self.unit
+        return self._inherit(
+            type(self)(
+                operation(left, right), deepcopy(self.axes), self.quantity, self.unit
+            )
         )
 
     def __add__(self, other: Operand) -> Self:
@@ -585,7 +767,9 @@ class DataBlock:
         return self._binary_op(other, operator.pow)
 
     def __neg__(self) -> Self:
-        return type(self)(-self.data, deepcopy(self.axes), self.quantity, self.unit)
+        return self._inherit(
+            type(self)(-self.data, deepcopy(self.axes), self.quantity, self.unit)
+        )
 
     def crop_axis(self, axis_name: str, min: float, max: float) -> Self:
         if not self.has_axis(axis_name):
@@ -614,7 +798,9 @@ class DataBlock:
 
         new_axes = deepcopy(self.axes)
         new_axes[relevant_axis.index_in_array] = new_axis
-        return type(self)(keep_values, new_axes, self.quantity, self.unit)
+        return self._inherit(
+            type(self)(keep_values, new_axes, self.quantity, self.unit)
+        )
 
     def rebin_reduce_axis(
         self,
@@ -670,7 +856,7 @@ class DataBlock:
         )
         new_axes = deepcopy(self.axes)
         new_axes[relevant_axis.index_in_array] = new_axis
-        return type(self)(new_view, new_axes, self.quantity, self.unit)
+        return self._inherit(type(self)(new_view, new_axes, self.quantity, self.unit))
 
     def pool(
         self,
@@ -717,19 +903,15 @@ class DataBlock:
             if pad:
                 widths = [(0, pad) if i == index else (0, 0) for i in range(data.ndim)]
                 data = da.pad(data.astype(float), widths, constant_values=np.nan)
-            new_axes[index] = type(axis)(
-                window_mean(points.reshape(-1, window), axis=1),
-                name=axis.name,
-                index_in_array=axis.index_in_array,
-                unit=axis.unit,
-                navigate=axis.is_nav,
+            new_axes[index] = _axis_from_points(
+                axis, window_mean(points.reshape(-1, window), axis=1)
             )
 
         if factors:
             data = da.coarsen(reducer, data, factors, trim_excess=remainder == "trim")
         if isinstance(self.data, np.ndarray):
             data = data.compute()
-        return type(self)(data, new_axes, self.quantity, self.unit)
+        return self._inherit(type(self)(data, new_axes, self.quantity, self.unit))
 
     def _pool_factors(self, windows: Mapping[str, object]) -> dict[int, int]:
         """Validated windows larger than 1, keyed by the index of their axis."""
@@ -812,7 +994,9 @@ class DataBlock:
             data = data.reshape((*(self.shape[i] for i in kept), -1))
             new_data = da.apply_along_axis(func1d=reducer, axis=-1, arr=data)
 
-        return type(self)(new_data, new_axes, quantity=out_quantity, unit=out_unit)
+        return self._inherit(
+            type(self)(new_data, new_axes, quantity=out_quantity, unit=out_unit)
+        )
 
     def _select(
         self, indexing: Mapping[str, object]
@@ -867,7 +1051,7 @@ class DataBlock:
                 has the wrong length or dimension.
         """
         new_data, new_axes = self._select(indexing)
-        return type(self)(new_data, new_axes, self.quantity, self.unit)
+        return self._inherit(type(self)(new_data, new_axes, self.quantity, self.unit))
 
     def value_get(
         self, indexing: Mapping[str, object]
@@ -906,7 +1090,9 @@ class DataBlock:
         cluster_data = cluster_labels.reshape(self.data.shape)
         new_axes = deepcopy(self.axes)
 
-        return type(self)(cluster_data, new_axes, quantity="cluster", unit="-")
+        return self._inherit(
+            type(self)(cluster_data, new_axes, quantity="cluster", unit="-")
+        )
 
     def split_on_axis(self, axis_name: str) -> list[Self]:
         """
@@ -937,8 +1123,13 @@ class DataBlock:
             )
 
             split_blocks.append(
-                type(self)(
-                    data=new_data, axes=new_axes, quantity=self.quantity, unit=self.unit
+                self._inherit(
+                    type(self)(
+                        data=new_data,
+                        axes=new_axes,
+                        quantity=self.quantity,
+                        unit=self.unit,
+                    )
                 )
             )
         return split_blocks
@@ -1004,7 +1195,9 @@ class DataBlock:
                 new_data = da.where(mask, self.data, da.ones(self.data.shape) * np.nan)
                 block_axes = deepcopy(new_axes)
             split_blocks.append(
-                type(self)(new_data, block_axes, self.quantity, self.unit)
+                self._inherit(
+                    type(self)(new_data, block_axes, self.quantity, self.unit)
+                )
             )
         return split_blocks
 

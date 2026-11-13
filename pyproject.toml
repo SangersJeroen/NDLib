@@ -50,6 +50,9 @@ where = ["."]
 include = ["*"]
 exclude = ["tests*", "scripts*", "docs*", "examples*"]
 
+[tool.setuptools.package-data]
+NDLib = ["py.typed"]
+
 # ============================================================
 # POE THE POET - Task Runner
 # ============================================================

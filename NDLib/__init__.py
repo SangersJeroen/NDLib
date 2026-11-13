@@ -1,4 +1,11 @@
-from .AxesStructures import SignalAxis, UnorderedSignalAxis
+from .AxesStructures import CategoricalAxis, LinearAxis, SignalAxis, UnorderedSignalAxis
 from .BaseStructures import DataBlock, Ensemble
 
-__all__ = ["DataBlock", "Ensemble", "SignalAxis", "UnorderedSignalAxis"]
+__all__ = [
+    "CategoricalAxis",
+    "DataBlock",
+    "Ensemble",
+    "LinearAxis",
+    "SignalAxis",
+    "UnorderedSignalAxis",
+]

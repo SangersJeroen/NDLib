@@ -1,4 +1,5 @@
 # pyright: basic
+from functools import cached_property
 from types import NotImplementedType
 
 import numpy as np
@@ -156,6 +157,71 @@ class SignalAxis(Axis):
         return (
             f"monotonic axis: '{self.name}'\t: {self.size} bins\n"
             + f"{self.min:.2f} {self.unit} <--------step: {self.scale:.2f} {self.unit}--------> {self.max:.2f} {self.unit}"
+        )
+
+
+class LinearAxis(SignalAxis):
+    """Uniformly spaced axis described by an offset, a scale and a size.
+
+    The coordinates are ``offset + scale * arange(size)``. They are only
+    materialised when `points` is first accessed, so large detector axes cost
+    three numbers. It is a `SignalAxis`, so it works wherever one does, but
+    compares unequal to a `SignalAxis` holding the same points.
+
+    Attributes:
+        offset: float; coordinate of the first point
+        scale: float; spacing between points, strictly positive
+        size: int; number of points, at least 1
+        points: np.ndarray; axis coordinates, computed on first access
+    """
+
+    def __init__(  # ruff: ignore[too-many-arguments, too-many-positional-arguments]
+        self,
+        offset: float,
+        scale: float,
+        size: int,
+        name: str,
+        index_in_array: int,
+        unit: str,
+        *,
+        navigate: bool = False,
+    ) -> None:
+        Axis.__init__(self, name, index_in_array, unit, navigate=navigate)
+        if size < 1:
+            raise ValueError(
+                f"LinearAxis '{name}' needs at least one point, got {size}"
+            )
+        if not (np.isfinite(offset) and np.isfinite(scale) and scale > 0):
+            raise ValueError(
+                f"LinearAxis '{name}' needs a finite offset and a finite, positive "
+                f"scale, got offset={offset}, scale={scale}"
+            )
+        self.offset: float = float(offset)
+        self.scale: float = float(scale)
+        self.size: int = int(size)
+        self.ordered = True
+        self.min: float = self.offset
+        self.max: float = self.offset + self.scale * (self.size - 1)
+
+    @cached_property
+    def points(self) -> Axis1D:  # type: ignore[override]
+        return self.offset + self.scale * np.arange(self.size)
+
+    def index_of(self, value: float) -> int:
+        """Index of the point nearest to `value`, clipped to the axis. A value halfway
+        between two points gives the lower index, as `np.argmin` on the points does
+        (up to floating point rounding)."""
+        index = int(np.ceil((value - self.offset) / self.scale - 0.5))
+        return min(max(index, 0), self.size - 1)
+
+    def __repr__(self) -> str:
+        return f"LinearAxis: {self.name}"
+
+    def __str__(self) -> str:
+        return (
+            f"linear axis: '{self.name}'\t: {self.size} bins\n"
+            + f"offset {self.offset:.4g} {self.unit}, scale {self.scale:.4g} {self.unit}"
+            + f" ({self.min:.4g} to {self.max:.4g} {self.unit})"
         )
 
 
