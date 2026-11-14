@@ -349,10 +349,16 @@ nested blocks, no `print` (use `logger`), full annotations, no boolean positiona
 Test files are exempt from `ANN`, `FBT`, `assert`. CamelCase module names are allowed.
 The pre-push hook and CI run tests, lint and types.
 
+## Module layout
+
+`NDLib/_datablock.py` holds `DataBlock`, `NDLib/_ensemble.py` holds `Ensemble` and
+`NDLib/_helpers.py` the helpers they share (axis selection, serialisation records, binning).
+`NDLib/BaseStructures.py` re-exports them, so `from NDLib.BaseStructures import DataBlock` and
+`from NDLib import DataBlock` both keep working. `mypy` is configured next to basedpyright
+(`uv run --extra dev mypy`).
+
 ## Known rough edges
 
-- `UnorderedSignalAxis` docstring is a `[TODO]`; its `__str__` prints `min` twice.
 - `Axis.is_nav`/`ordered` are documented as unused.
 - `Ensemble.to_datablock` has a `# TODO: does this work without?` around an eager compute.
 - Ensemble arithmetic and several Ensemble methods are narrower than their DataBlock twins.
-- README is only a stub; this file is the best overview.

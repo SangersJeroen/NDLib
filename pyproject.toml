@@ -1,7 +1,7 @@
 # ============================================================
 # ULTRA-STRICT PYTHON PROJECT TEMPLATE
 # Maximum strictness - TypeScript strict mode equivalent
-# Tools: uv + ruff + basedpyright + pydantic v2
+# Tools: uv + ruff + basedpyright + mypy
 # Python 3.12+
 # ============================================================
 
@@ -23,9 +23,6 @@ dependencies = [
     "pyarrow",  # required by dask.dataframe
     "sparse",
     "zarr",
-    "pydantic>=2.0.0",
-    "types-requests",
-    "python-dotenv",
     "typing-extensions>=4.12",
 ]
 
@@ -41,6 +38,7 @@ dev = [
     "ty",
     "pytest",
     "pandas-stubs",
+    "mypy",
     "pytest-cov",  # required by the --cov options in [tool.pytest.ini_options]
     "dask-ml",  # optional: DataBlock.cluster
 ]
@@ -140,7 +138,7 @@ select = [
     "ARG",    # flake8-unused-arguments
     "FBT",    # flake8-boolean-trap (no boolean positional args)
     "RET",    # flake8-return
-    "TCH",    # flake8-type-checking
+    "TC",    # flake8-type-checking
 ]
 
 ignore = [
@@ -412,3 +410,14 @@ dev = [
 # # def test_my_function(df):
 # #     result = my_function(df)
 # #     assert OutputSchema.validate(result)
+
+
+# mypy is an additional check next to basedpyright (the project's strict type checker)
+[tool.mypy]
+files = ["NDLib"]
+python_version = "3.11"
+warn_unused_ignores = false
+
+[[tool.mypy.overrides]]
+module = ["sparse", "sparse.*"]
+ignore_missing_imports = true

@@ -1,6 +1,7 @@
 # pyright: basic
 from functools import cached_property
 from types import NotImplementedType
+from typing import Any, cast
 
 import numpy as np
 import numpy.typing as npt
@@ -36,6 +37,9 @@ class Axis:
         self.max: Number | None = None
         self.scale: Number | None = None
 
+    # the calibrated coordinates of every point; each subclass provides them
+    points: Axis1D
+
     def __repr__(self) -> str:
         return f"{self.__class__}  {self.name}  {self.unit}  {self.index_in_array}"
 
@@ -45,7 +49,7 @@ class Axis:
     def __len__(self) -> int:
         return self.size
 
-    def __eq__(
+    def __eq__(  # type: ignore[override]
         self, other: object, /
     ) -> bool | npt.NDArray[np.bool_] | NotImplementedType:
         """Compares two axes by value, anything else elementwise against the points.
@@ -136,7 +140,7 @@ class SignalAxis(Axis):
             self.scale = np.inf
 
     def _compare_points(self, value: object) -> npt.NDArray[np.bool_]:
-        return np.equal(self.points, value)
+        return np.equal(self.points, cast("Any", value))
 
     def __gt__(self, value: object, /) -> npt.NDArray[np.bool_]:
         return self.points > value
@@ -226,7 +230,12 @@ class LinearAxis(SignalAxis):
 
 
 class UnorderedSignalAxis(Axis):
-    """[TODO:description]
+    """A signal axis whose points are not uniformly spaced or not sorted.
+
+    Use it when the coordinates are explicit values (a calibration curve, a list of
+    measured energies) rather than ``offset + scale * arange(size)``; ``LinearAxis`` is
+    the right choice for uniform spacing. Selection on it picks by value, never by a
+    cheap slice.
 
     Attributes:
         points: np.ndarray | dask.array.Array; axis coordinates
@@ -271,7 +280,7 @@ class UnorderedSignalAxis(Axis):
         return (
             "navigational " * self.is_nav
             + f"irregularly spaced {self.name} axis: {self.size} bins\n"
-            + f"{self.min:.2f} {self.unit} <--------{self.size} steps--------> {self.min:.2f} {self.unit}"
+            + f"{self.min:.2f} {self.unit} <--------{self.size} steps--------> {self.max:.2f} {self.unit}"
         )
 
     def crop(self, min: Number | None = None, max: Number | None = None) -> None:
@@ -327,4 +336,4 @@ class CategoricalAxis(Axis):
 
     def _compare_points(self, value: object) -> npt.NDArray[np.bool_]:
         points: np.ndarray = self.points
-        return np.equal(points, value)
+        return np.equal(points, cast("Any", value))

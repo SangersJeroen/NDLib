@@ -758,7 +758,7 @@ class TestDataBlockCluster:
         return DataBlock(da.from_array(levels + noise, chunks=(3, 20)), axes)
 
     def test_without_dask_ml_raises(self, monkeypatch):
-        monkeypatch.setattr("NDLib.BaseStructures.DASKML", False)
+        monkeypatch.setattr("NDLib._datablock.DASKML", False)
 
         with pytest.raises(ImportError, match="dask-ml"):
             self._block().cluster()
